@@ -356,3 +356,17 @@ test('家庭照护分页保留历史老人，失败不前移游标且旧页面�
   await loading;
   assert.equal(page.data.elders.length, 2);
 });
+
+
+test('成员独立健康授权默认关闭且在会话失效和撤回时清除', () => {
+  const definition = loadPage('../pages/elder-edit/index');
+  const page = makePage(definition);
+  assert.equal(page.data.healthConsent, false);
+  page.onHealthConsent({ detail: { value: ['consent'] } });
+  assert.equal(page.data.healthConsent, true);
+  page.onSessionInvalidated();
+  assert.equal(page.data.healthConsent, false);
+  page.onHealthConsent({ detail: { value: ['consent'] } });
+  page.onHealthConsentRequired();
+  assert.equal(page.data.healthConsent, false);
+});

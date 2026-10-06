@@ -4338,6 +4338,7 @@ wait_for_health() {
     fail "应用健康检查失败: $url"
 }
 
+# RF 已退出生产；历史 pickle 制品仍由快照校验，本门禁验证公开停用契约。
 validate_candidate_ml_contract() {
     local base_url="http://$CANDIDATE_BIND"
     local ml_body
@@ -4356,23 +4357,24 @@ import sys
 payload = json.load(sys.stdin)
 status = payload.get("status") if isinstance(payload, dict) else None
 valid = (
-    payload.get("success") is True
+    isinstance(payload, dict)
+    and payload.get("success") is True
     and isinstance(status, dict)
-    and status.get("model_loaded") is True
-    and status.get("runtime_sklearn_version") == "1.7.2"
-    and status.get("expected_sklearn_version") == "1.7.2"
-    and status.get("sklearn_compatible") is True
+    and status.get("availability") == "research_only"
+    and status.get("production_enabled") is False
+    and "accuracy" in status
+    and status["accuracy"] is None
 )
 raise SystemExit(0 if valid else 1)
 '; then
-        fail "候选应用 ML 运行态版本或模型状态异常"
+        fail "候选应用 RF 未明确停用或仍宣称生产准确率"
         return 1
     fi
 }
 
 validate_candidate_weather_contracts() {
     local base_url="http://$CANDIDATE_BIND"
-    local bootstrap_body risk_body
+    local bootstrap_body risk_body hazard
 
     bootstrap_body="$(
         "$CURL_BIN" --fail --silent --show-error --max-time 5 \
@@ -4436,10 +4438,20 @@ raise SystemExit(0 if valid else 1)
             return 1
             ;;
     esac
+    # 四灾种分别呈现；降雨未知、寒冷研究中和暂无官方预警均不冒充高温结果。
+    for hazard in heat rain cold official; do
+        case "$risk_body" in
+            *"data-hazard-card=\"$hazard\""*) ;;
+            *)
+                fail "候选应用公开风险页缺少灾种卡片: $hazard"
+                return 1
+                ;;
+        esac
+    done
     case "$risk_body" in
-        *当前风险：*) ;;
+        *高温健康：低风险*|*高温健康：中风险*|*高温健康：高风险*|*高温健康：极高*) ;;
         *)
-            fail "候选应用公开风险页缺少已生成的风险结果"
+            fail "候选应用公开风险页缺少已生成的高温健康结果"
             return 1
             ;;
     esac

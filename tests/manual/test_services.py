@@ -5,6 +5,7 @@
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -13,6 +14,39 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
 pytestmark = pytest.mark.manual
+
+
+def _assert_unknown_forecast(forecasts, summary):
+    """无真实门诊阈值时，数量和未校准预警均不能冒充已知结果。"""
+    assert len(forecasts) == 7
+    assert summary['total_expected_visits'] is None
+    assert summary['average_daily_visits'] is None
+    assert summary['unknown_health_days'] == 7
+    assert summary['visit_projection_status'] == 'unknown'
+    assert summary['high_risk_days'] is None
+    assert summary['overall_risk'] == 'unavailable'
+    assert summary['model_warning_status'] == 'disabled_uncalibrated'
+    products = summary['probability_products']
+    assert products['available'] is False
+    assert products['status'] == 'disabled_uncalibrated'
+    for key in ('days_prob_exceed_p90_ge50', 'days_prob_exceed_p90_ge30', 'days_prob_exceed_p75_ge50'):
+        assert products[key] is None
+    for key in ('optimistic_total', 'baseline_total', 'worst_case_total', 'worst_case_extra'):
+        assert summary['scenario_totals'][key] is None
+    for row in forecasts:
+        visits = row['visits']
+        assert visits['status'] == 'unknown'
+        assert 'historical_visit_threshold' in visits['missing_inputs']
+        for key in ('point_estimate', 'lower_bound', 'upper_bound', 'p10', 'p50', 'p90',
+                    'probability_exceed_p90', 'probability_exceed_p75', 'rr', 'baseline'):
+            assert visits[key] is None
+        assert row['risk_level'] is None
+        assert row['probability_high_visits'] is None
+        assert row['model_warning_status'] == 'disabled_uncalibrated'
+        assert row['cap_semantics'] == {
+            'severity': 'unknown', 'certainty': 'unknown', 'urgency': 'unknown',
+            'status': 'disabled_uncalibrated',
+        }
 
 
 def test_dlnm_service():
@@ -72,10 +106,13 @@ def test_forecast_service():
         # 测试7天预测
         print("\n7天健康预测测试:")
         forecast_temps = [15, 18, 22, 28, 32, 25, 18]  # 模拟预报温度
-        forecasts, summary = service.generate_7day_forecast(forecast_temps)
+        # 显式移除门诊阈值，离线演练不依赖本机真实门诊样本。
+        with patch.object(service, 'visit_threshold_p90', None):
+            forecasts, summary = service.generate_7day_forecast(forecast_temps)
+        _assert_unknown_forecast(forecasts, summary)
         
         print(f"预测期间: {summary['forecast_period']['start']} 至 {summary['forecast_period']['end']}")
-        print(f"预计总门诊量: {summary['total_expected_visits']:.0f} 人次")
+        print("预计总门诊量: 未知（缺少真实门诊阈值）")
         print(f"高风险天数: {summary['high_risk_days']} 天")
         
         print("\n每日预测:")
@@ -234,10 +271,12 @@ def test_integration():
         
         # 3. 7天预测
         forecast_temps = [38, 36, 35, 32, 28, 25, 22]  # 高温后降温
-        forecasts, summary = forecast.generate_7day_forecast(forecast_temps)
+        with patch.object(forecast, 'visit_threshold_p90', None):
+            forecasts, summary = forecast.generate_7day_forecast(forecast_temps)
+        _assert_unknown_forecast(forecasts, summary)
         print(f"\n7天预测摘要:")
         print(f"  高风险天数: {summary['high_risk_days']} 天")
-        print(f"  预计总门诊: {summary['total_expected_visits']:.0f} 人次")
+        print("  预计总门诊: 未知（缺少真实门诊阈值）")
         
         # 4. 慢病风险
         user = {'age': 75, 'chronic_diseases': ['高血压', '冠心病']}
@@ -245,16 +284,25 @@ def test_integration():
         print(f"\n75岁心血管患者风险:")
         print(f"  风险等级: {chronic_result['overall_risk']['level']}")
         
-        # 确定综合预警
-        if rr >= 1.4 or summary['high_risk_days'] >= 3:
-            alert = '红色预警'
-        elif rr >= 1.2 or summary['high_risk_days'] >= 1:
-            alert = '橙色预警'
-        else:
-            alert = '正常'
-        
-        print(f"\n综合预警级别: {alert}")
-        
+        # 未校准模型不能用临时 RR 阈值拼接红橙预警，也不能降为正常。
+        assert summary['model_warning_status'] == 'disabled_uncalibrated'
+        print("\n综合预警: 未启用（模型概率尚未校准，请查看独立官方预警）")
+
+        # 默认生产入口必须退出 RF 推理，研究开关不在本演练中启用。
+        from services.ml_prediction_service import MLPredictionService
+        ml = MLPredictionService()
+        model_status = ml.get_model_status()
+        assert model_status['status'] == 'research_only'
+        assert model_status['production_enabled'] is False
+        assert model_status['accuracy'] is None
+        assert model_status['model_loaded'] is False
+        prediction = ml.predict_disease_risk(user, weather)
+        assert prediction['success'] is False
+        assert prediction['status'] == 'research_only'
+        assert prediction['production_enabled'] is False
+        assert prediction['predictions'] == []
+        print("RF: 已退出生产预测")
+
         print("\n✅ 集成测试通过")
         
     except Exception as e:
@@ -302,7 +350,7 @@ def main():
     print(f"\n总计: {passed}/{total} 通过")
     
     if passed == total:
-        print("\n🎉 所有测试通过！系统就绪。")
+        print("\n🎉 离线服务契约全部通过；线上状态仍须单独验证。")
     else:
         print("\n⚠️ 部分测试失败，请检查错误信息。")
     

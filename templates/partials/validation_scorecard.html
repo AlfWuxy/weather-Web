@@ -1,0 +1,25 @@
+<section class="my-4" id="validation-scorecard" aria-labelledby="validation-title">
+  <h2 class="h3" id="validation-title">公开验证成绩单</h2>
+  {% if validation_scorecard.exploratory %}{% include 'partials/retrospective_scorecard.html' %}{% endif %}
+  <h3 class="h5 mt-4">事前归档与前瞻验证</h3>
+  {% set scorecard = validation_scorecard %}
+  {% if scorecard.status == 'unavailable' %}
+  <div class="alert alert-warning"><strong>生产模型尚无可核验的事前归档验证</strong><p class="mb-0">{{ scorecard.reason }}</p></div>
+  {% else %}
+  <p>测试期：{{ scorecard.test_period.start }} 至 {{ scorecard.test_period.end }} · 样本量：{{ scorecard.n }} · 结局：{{ scorecard.outcome }}</p>
+  <p class="small">模型版本：{{ scorecard.model_versions|join('、') or '仅基线' }} · 提前天数：{{ scorecard.lead_days|join('、') }}</p>
+  {% if not scorecard.metrics %}<p class="alert alert-warning">目前仅有季节朴素基线回测，网站生产模型仍未验证。</p>{% endif %}
+  <div class="table-responsive"><table class="table">
+    <thead><tr><th>方法</th><th>MAE</th><th>RMSE</th><th>80% 区间覆盖率</th><th>95% 区间覆盖率</th></tr></thead>
+    <tbody>
+    {% for name, item in [('模型事前归档', scorecard.metrics), (scorecard.baseline.name, scorecard.baseline)] %}
+    <tr><th>{{ name }}</th><td>{{ item.mae if item else '未验证' }}</td><td>{{ item.rmse if item else '未验证' }}</td>
+      {% for level in [80, 95] %}<td>{% if item and item['coverage_' ~ level] is not none %}{{ (item['coverage_' ~ level] * 100)|round(1) }}%（n={{ item['coverage_' ~ level ~ '_n'] }}）{% else %}暂无区间{% endif %}</td>{% endfor %}
+    </tr>
+    {% endfor %}
+    </tbody></table></div>
+  {% if scorecard.mae_improvement_vs_baseline is not none %}<p>相对基线 MAE 改善：{{ (scorecard.mae_improvement_vs_baseline * 100)|round(1) }}%（负数表示更差）。</p>{% endif %}
+  {% endif %}
+  <p class="small text-muted">真实前瞻验证样本：{{ scorecard.prospective_n }}。训练集成绩、历史回测和真实前瞻验证分别报告。</p>
+  <ul class="small text-muted">{% for item in scorecard.limitations %}<li>{{ item }}</li>{% endfor %}</ul>
+</section>

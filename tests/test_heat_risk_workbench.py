@@ -40,7 +40,7 @@ def test_workbench_is_default_view(authenticated_client):
 
     assert 'id="heatRiskWorkbench"' in html
     assert "风险暂不可判定" in html
-    assert "巡访优先清单" in html
+    assert "结构核实清单" in html
     assert "/static/data/gis/duchang_heat_risk_workbench.json?v=" in html
     assert "/data/duchang-heat-exposure.geojson?v=" in html
     assert 'data-daily-url="/heat-exposure-gis/daily.json"' in html
@@ -119,8 +119,10 @@ def test_daily_api_payload_in_demo_mode(authenticated_client):
     legacy = [v for v in payload["villages"] if v["id"].startswith("legacy-village:")]
     assert len(legacy) == 16 and all(v["cell_id"] for v in legacy)
     assert len(payload["poi_coverage"]) == 24
-    assert len(payload["priority"]) == 7
-    assert len(payload["priority"][0]["villages"]) == 5
+    assert payload["priority"] == []
+    assert len(payload["structural_priority"]["villages"]) == 5
+    assert payload["structural_priority"]["weather_used"] is False
+    assert payload["realtime_risk_spatial_scale"] == "county"
     assert set(payload["action_cards"]) == {"0", "1", "2", "3", "4"}
 
 
@@ -165,29 +167,13 @@ def test_escalation_caps_at_level_four():
     assert days[0]["level"] == 4
 
 
-@pytest.mark.parametrize(
-    ("hazard", "static", "expected"),
-    [
-        (None, 4, None), (0, 4, 0), (0, None, 0),
-        (1, 0, 1), (1, 2, 1), (1, 3, 2),
-        (2, 1, 1), (2, 2, 2), (2, 4, 3),
-        (3, 0, 2), (3, 3, 4),
-        (4, 0, 3), (4, 4, 4), (4, None, 4),
-    ],
-)
-def test_daily_matrix(hazard, static, expected):
-    assert combine_daily_level(hazard, static) == expected
+@pytest.mark.parametrize("hazard", [None, 0, 1, 2, 3, 4])
+@pytest.mark.parametrize("static", [None, 0, 1, 2, 3, 4])
+def test_daily_matrix_no_longer_invents_local_realtime_risk(hazard, static):
+    assert combine_daily_level(hazard, static) is None
 
 
-def test_js_matrix_mirrors_python_rule():
-    script = (PROJECT_ROOT / "static/js/heat-risk-workbench.js").read_text(encoding="utf-8")
-    assert "if (hazard === 0) return 0;" in script
-    assert "if (staticLevel <= 1) adjust = -1;" in script
-    assert "else if (staticLevel >= 3) adjust = 1;" in script
-    assert "return Math.max(1, Math.min(4, hazard + adjust));" in script
-
-
-def test_rank_villages_orders_by_daily_then_static():
+def test_rank_villages_uses_only_historical_structure_and_is_weather_invariant():
     villages = [
         {"name": "甲", "static_level": 1, "static_score": 30, "population": 100, "elderly_ratio": 0.5},
         {"name": "乙", "static_level": 3, "static_score": 65, "population": 50, "elderly_ratio": 0.4},
@@ -195,7 +181,10 @@ def test_rank_villages_orders_by_daily_then_static():
     ]
     ranked = rank_villages(villages, {"level": 2, "reasons": []}, limit=0)
     assert [v["name"] for v in ranked] == ["丙", "乙", "甲"]
-    assert [v["daily_level"] for v in ranked] == [3, 3, 1]
+    for hazard in [None, 0, 1, 4]:
+        assert rank_villages(villages, {"level": hazard}, limit=0) == ranked
+    assert [v["daily_level"] for v in ranked] == [None, None, None]
+    assert [v["structural_level"] for v in ranked] == [3, 3, 1]
     assert ranked[0]["elderly_estimate"] == 80
 
 
@@ -351,3 +340,15 @@ def test_tied_scores_share_rank():
             by_score.setdefault(cells["score"][i], set()).add(cells["top_pct"][i])
     assert any(len(v) == 1 for v in by_score.values())
     assert all(len(v) == 1 for v in by_score.values())
+
+
+def test_daily_payload_does_not_change_structure_with_county_weather():
+    from services.heat_risk_workbench_service import build_daily_payload
+    villages = [{"id": "v1", "name": "村", "static_level": 3, "static_score": 65}]
+    cold = build_daily_payload(_days((20, 15)), 0, villages, [], "synthetic")
+    hot = build_daily_payload(_days((40, 30)), 4, villages, [], "synthetic")
+    missing = build_daily_payload([], 0, villages, [], "synthetic")
+    assert cold['days'][0]['level'] != hot['days'][0]['level']
+    assert cold['structural_priority'] == hot['structural_priority'] == missing['structural_priority']
+    assert cold['priority'] == hot['priority'] == []
+    assert cold['grid_weather_used'] is False

@@ -95,6 +95,7 @@ def test_admin_password_reset_revokes_target_sessions(app, client):
             'community': '',
             'role': 'user',
             'password': 'ResetPassword2!',
+            'current_password': 'AdminPassword1!',
             'csrf_token': csrf_token,
         },
         follow_redirects=False,

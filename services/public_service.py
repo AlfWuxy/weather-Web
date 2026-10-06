@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from flask import (
     current_app,
     flash,
+    jsonify,
     make_response,
     redirect,
     render_template,
@@ -69,6 +70,8 @@ from services.community_daily_service import (
     refresh_community_daily_best_effort as _refresh_community_daily_best_effort,
 )
 from services.heat_action_service import HeatActionService
+from services.cooling_service import compute_verify_status, present_cooling_cards
+from services.public_weather_presenter import public_official_alerts, configured_miniprogram_qr
 from services.guest_experience import (
     GuestExperienceError,
     delete_experience,
@@ -871,15 +874,18 @@ def _validate_pair_token_binding(pair, short_code, token):
     """校验 /e/<token>/... 动作与绑定关系。"""
     token = (token or '').strip()
     short_code = (short_code or '').replace(' ', '').strip()
-    if not token or not short_code:
+    if not token or not short_code or not pair or pair.status != 'active':
+        return False
+    owner = db.session.get(User, pair.caregiver_id)
+    if not owner or not owner.is_active:
         return False
     if _validate_pair_action_token(pair, short_code, token):
         return True
     short_code_hash = hash_short_code(short_code)
     link = PairLink.query.filter_by(short_code_hash=short_code_hash).order_by(PairLink.id.desc()).first()
-    if not link:
+    if not link or link.status not in ('active', 'redeemed'):
         return False
-    if link.expires_at and ensure_utc_aware(link.expires_at) < utcnow():
+    if link.expires_at and ensure_utc_aware(link.expires_at) <= utcnow():
         return False
     if not verify_pair_token(token, link.token_hash):
         return False
@@ -893,9 +899,21 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
     if formal_rejection is not None:
         return formal_rejection
 
-    short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
+    payload = request.get_json(silent=True) if request.is_json else {}
+    payload = payload if isinstance(payload, dict) else {}
+    short_code = sanitize_input(request.form.get('short_code') or payload.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
-    token = sanitize_input(request.form.get('token') or token, max_length=200)
+    token = sanitize_input(request.form.get('token') or payload.get('token') or token, max_length=200)
+    if not current_user.is_authenticated or is_guest_user(current_user):
+        # 只返回可重入 GET；登录会清除旧绑定会话，必须重新校验凭证。
+        next_url = (url_for('public.elder_token_entry', token=token, short_code=short_code)
+                    if token else url_for('public.action_check', short_code=short_code))
+        login_url = url_for('public.login', next=next_url)
+        if request.is_json or request.accept_mimetypes.best == 'application/json':
+            return jsonify(error='login_required', login_url=login_url,
+                           message='确认行动完成需要登录正式账号；短码仍可用于查看与求助。'), 401
+        flash('确认行动完成需要登录正式账号；登录后请重新校验短码。', 'info')
+        return redirect(login_url)
     resolution_token = token or _get_pair_token()
     pair = _resolve_pair_from_session_or_code(
         short_code,
@@ -911,6 +929,16 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
                 flash('绑定已停用，无法记录确认。', 'error')
                 return redirect(url_for('public.action_check'))
             pair = locked_pair
+            session_bound = (session.get('pair_session_id') == pair.id
+                             and session.get('pair_session_code') in (short_code, pair.short_code)
+                             and bool(session.get('pair_session_code')))
+            owner_bound = current_user.id == pair.caregiver_id
+            token_bound = bool(resolution_token and _validate_pair_token_binding(pair, short_code, resolution_token))
+            if not (session_bound or owner_bound or token_bound):
+                if request.is_json:
+                    return jsonify(error='pair_authorization_required'), 403
+                flash('请先用有效短码或家庭安全链接进入对应行动页面。', 'error')
+                return redirect(url_for('public.action_check', short_code=short_code))
             if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(
                 pair, short_code, token
             ):
@@ -932,7 +960,9 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
                 risk_label,
                 risk_reasons,
             ) = _build_action_context(pair, status_date)
-            actions_done = request.form.getlist('actions_done')
+            actions_done = payload.get('actions_done', []) if request.is_json else request.form.getlist('actions_done')
+            if not isinstance(actions_done, list) or any(not isinstance(value, str) for value in actions_done):
+                return jsonify(error='invalid_actions'), 400
             allowed_action_ids = {
                 str(item.get('id') or '')
                 for item in actions
@@ -985,6 +1015,8 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
         mutation.status_date,
         event_logger=logger,
     )
+    if request.is_json:
+        return jsonify(ok=True, message='已记录今日确认。')
     flash('已记录今日确认。', 'success')
     action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
@@ -1632,6 +1664,9 @@ def handle_register():
 
         try:
             db.session.add(user)
+            if request.form.get('health_consent') == 'on':
+                from services.account_service import grant_health_consent
+                grant_health_consent(user, user)
             db.session.commit()
         except IntegrityError:
             # 用户名与邮箱唯一索引负责处理并发注册竞争。
@@ -1653,6 +1688,8 @@ def handle_register():
 
 def _verified_cooling_map_point(resource):
     """把仍在人工核验有效期内的 GCJ-02 点位转换为公开地图数据。"""
+    if compute_verify_status(resource) != 'verified':
+        return None
     if (
         resource.coordinate_verified_at is None
         or resource.coordinate_system != 'GCJ-02'
@@ -1780,10 +1817,14 @@ def render_cooling_resources_page(
     candidate_preview = list(cooling_candidates or [])
     communities = sorted({item.community_code for item in all_resources if item.community_code})
     resource_types = sorted({item.resource_type for item in all_resources if item.resource_type})
+    resource_cards = present_cooling_cards(resources)
+    verified_cards = [card for card in resource_cards if card.verify_status == 'verified']
+    pending_cards = [card for card in resource_cards if card.verify_status != 'verified']
     grouped = {}
     map_points = []
-    for item in resources:
-        grouped.setdefault(item.community_code or '未标注社区', []).append(item)
+    for card in verified_cards:
+        item = card.resource
+        grouped.setdefault(item.community_code or '未标注社区', []).append(card)
         map_point = _verified_cooling_map_point(item)
         if map_point is not None:
             map_points.append(map_point)
@@ -1793,7 +1834,9 @@ def render_cooling_resources_page(
     response = make_response(render_template(
         'cooling.html',
         resources_by_community=grouped,
-        total=len(resources),
+        verified_cards=verified_cards,
+        pending_cards=pending_cards,
+        total=len(verified_cards),
         communities=communities,
         resource_types=resource_types,
         selected_community=community or '',
@@ -1820,7 +1863,7 @@ def render_cooling_resources_page(
     return response
 
 
-def render_public_risk_page(location):
+def render_public_risk_page(location, elder_mode=False):
     """公开风险页与小程序 bootstrap 读取同一持久化快照。"""
     snapshot = get_bootstrap_payload()
     snapshot_location = snapshot.get('location') or {}
@@ -1854,6 +1897,9 @@ def render_public_risk_page(location):
         actions=snapshot.get('actions') or [],
         risk_reasons=risk_reasons,
         family_reminder=snapshot.get('family_reminder'),
+        official_alerts=public_official_alerts(location_name),
+        elder_mode=elder_mode,
+        miniprogram_qr=configured_miniprogram_qr(),
     )
 
 

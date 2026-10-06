@@ -614,7 +614,7 @@ def build_public_geojson(
     }
 
     metadata = {
-        "title": "都昌县 1 km 网格级热暴露 GIS",
+        "title": "都昌县 1 km 结构脆弱性 GIS",
         "schema_version": "1.2.0",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "study_period": {

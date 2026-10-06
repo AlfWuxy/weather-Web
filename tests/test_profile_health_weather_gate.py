@@ -7,6 +7,10 @@ import pytest
 
 
 def _login_as(client, user):
+    from services.account_service import grant_health_consent
+    from core.extensions import db
+    grant_health_consent(user, user)
+    db.session.commit()
     with client.session_transaction() as session:
         session.clear()
         session['_user_id'] = user.get_id()

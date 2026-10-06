@@ -199,3 +199,21 @@ def test_metric_popover_is_scrollable_on_narrow_screens():
     assert 'overscroll-behavior: contain' in css
     assert '.yl-metric-popover .popover-arrow' in css
     assert 'display: none' in css
+
+
+def test_integrity_catalog_preserves_production_boundaries():
+    from core.metric_explanations import METRIC_EXPLANATIONS as metrics, METRIC_EXPLANATION_GROUPS
+    forecast = metrics['forecast_predictability']
+    assert '有效外部分优先' in forecast['formula']
+    assert '0–100 原值' in forecast['formula']
+    assert '外部未验证' in ''.join(forecast['variables'])
+    assert 'disabled_uncalibrated' in metrics['forecast_visit_probability']['missing']
+    assert '两层年龄' not in str(metrics['chronic_risk_score'])
+    assert 'VI' not in metrics['expected_excess']['formula']
+    assert 'Population×1000' in metrics['community_weather_hazard']['formula']
+    assert '0.93' not in str(metrics['community_risk_index'])
+    assert '6×ExpectedExcess' not in metrics['community_impact_likelihood']['formula']
+    assert '不生成村级或网格实时等级' in metrics['gis_daily_level']['summary']
+    assert 'adj' not in metrics['gis_daily_level']['formula']
+    group = next(group for group in METRIC_EXPLANATION_GROUPS if group['id'] == 'gis_workbench')
+    assert '不生成网格或村级实时排名' in group['description']

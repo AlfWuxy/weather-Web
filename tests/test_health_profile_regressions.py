@@ -6,6 +6,14 @@ from core.db_models import HealthRiskAssessment, User
 from core.extensions import db
 
 
+@pytest.fixture(autouse=True)
+def explicit_health_consent(authenticated_client, db_session):
+    from services.account_service import grant_health_consent
+    user = User.query.filter_by(username='testuser').one()
+    grant_health_consent(user, user)
+    db_session.commit()
+
+
 SCREENING_DATA = {
     'outdoor_exposure': 'medium',
     'symptom_level': 'none',

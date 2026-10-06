@@ -16,6 +16,14 @@ from core.time_utils import today_local, utcnow
 from core.extensions import db
 
 
+def _confirmation_actor_session_id(app):
+    """确认现在需要正式登录；独立测试账号仍必须持有对应家庭凭证。"""
+    import uuid
+    with app.app_context():
+        actor = _create_user('confirm_actor_' + uuid.uuid4().hex[:12], 'actor-test-password')
+        return actor.get_id()
+
+
 def _login(client, username, password):
     with client.session_transaction() as sess:
         sess["_csrf_token"] = "test-csrf-token"
@@ -494,7 +502,10 @@ def test_token_route_rejects_mismatched_token(app, client):
         db.session.commit()
         pair_id = pair.id
 
+    actor_session_id = _confirmation_actor_session_id(app)
     with client.session_transaction() as sess:
+        sess["_user_id"] = actor_session_id
+        sess["_fresh"] = True
         sess["_csrf_token"] = "token-csrf-a"
 
     resp = client.post(
@@ -547,7 +558,10 @@ def test_token_route_accepts_valid_token(app, client, monkeypatch):
         db.session.commit()
         pair_id = pair.id
 
+    actor_session_id = _confirmation_actor_session_id(app)
     with client.session_transaction() as sess:
+        sess["_user_id"] = actor_session_id
+        sess["_fresh"] = True
         sess["_csrf_token"] = "token-csrf-b"
 
     resp = client.post(
@@ -600,7 +614,10 @@ def test_pair_action_token_route_accepts_valid_token(app, client, monkeypatch):
         db.session.commit()
         pair_id = pair.id
 
+    actor_session_id = _confirmation_actor_session_id(app)
     with client.session_transaction() as sess:
+        sess["_user_id"] = actor_session_id
+        sess["_fresh"] = True
         sess["_csrf_token"] = "action-token-csrf"
 
     resp = client.post(
@@ -638,7 +655,10 @@ def test_web_action_token_confirm_persists_status_and_safe_event(
             "web-confirm-token",
         )
 
+    actor_session_id = _confirmation_actor_session_id(app)
     with client.session_transaction() as sess:
+        sess["_user_id"] = actor_session_id
+        sess["_fresh"] = True
         sess["_csrf_token"] = "web-confirm-csrf"
 
     response = client.post(
@@ -687,7 +707,10 @@ def test_web_action_rejects_duplicate_or_unknown_items_without_count_drift(
             "web-invalid-action-token",
         )
 
+    actor_session_id = _confirmation_actor_session_id(app)
     with client.session_transaction() as sess:
+        sess["_user_id"] = actor_session_id
+        sess["_fresh"] = True
         sess["_csrf_token"] = "web-invalid-action-csrf"
 
     duplicate = client.post(
@@ -752,7 +775,10 @@ def test_web_action_succeeds_when_community_projection_fails(
         "refresh_community_daily",
         fail_projection,
     )
+    actor_session_id = _confirmation_actor_session_id(app)
     with client.session_transaction() as sess:
+        sess["_user_id"] = actor_session_id
+        sess["_fresh"] = True
         sess["_csrf_token"] = "web-projection-failure-csrf"
 
     response = client.post(
@@ -1100,7 +1126,10 @@ def test_pair_action_token_route_rejects_expired_token(app, client):
         db.session.commit()
         pair_id = pair.id
 
+    actor_session_id = _confirmation_actor_session_id(app)
     with client.session_transaction() as sess:
+        sess["_user_id"] = actor_session_id
+        sess["_fresh"] = True
         sess["_csrf_token"] = "expired-action-token-csrf"
 
     resp = client.post(
@@ -1157,7 +1186,10 @@ def test_generated_action_token_survives_short_code_expiry_and_is_reused(
         assert PairActionToken.query.filter_by(pair_id=pair_id).count() == 1
         token = first_link.rsplit("/e/", 1)[-1].split("?", 1)[0]
 
+    actor_session_id = _confirmation_actor_session_id(app)
     with client.session_transaction() as sess:
+        sess["_user_id"] = actor_session_id
+        sess["_fresh"] = True
         sess["_csrf_token"] = "generated-token-csrf"
 
     response = client.post(
@@ -1425,7 +1457,10 @@ def test_legacy_short_code_rejects_expired_pair(app, client):
         db.session.commit()
         pair_id = pair.id
 
+    actor_session_id = _confirmation_actor_session_id(app)
     with client.session_transaction() as sess:
+        sess["_user_id"] = actor_session_id
+        sess["_fresh"] = True
         sess["_csrf_token"] = "expired-short-csrf"
 
     resp = client.post(
@@ -1474,7 +1509,10 @@ def test_session_pair_must_match_submitted_short_code(app, client):
         pair_a_id = pair_a.id
         pair_b_id = pair_b.id
 
+    actor_session_id = _confirmation_actor_session_id(app)
     with client.session_transaction() as sess:
+        sess["_user_id"] = actor_session_id
+        sess["_fresh"] = True
         sess["_csrf_token"] = "session-mismatch-csrf"
         sess["pair_session_id"] = pair_a_id
         sess["pair_session_code"] = "10101010"
@@ -1527,7 +1565,10 @@ def test_web_action_rejects_an_already_deleted_owner_before_writing(
         db.session.commit()
 
     csrf_token = f"deleted-owner-{action_path}-csrf"
+    actor_session_id = _confirmation_actor_session_id(app)
     with client.session_transaction() as sess:
+        sess["_user_id"] = actor_session_id
+        sess["_fresh"] = True
         sess["_csrf_token"] = csrf_token
     form = {
         "short_code": short_code,
@@ -1609,10 +1650,14 @@ def test_pair_stop_first_blocks_inflight_public_action(
 
     monkeypatch.setattr(public_service, "_active_pair_write_guard", delayed_pair_guard)
 
+    actor_session_id = _confirmation_actor_session_id(app)
+
     def write_action():
         with app.test_client() as thread_client:
             csrf_token = f"stop-first-{action_path}-csrf"
             with thread_client.session_transaction() as session_record:
+                session_record["_user_id"] = actor_session_id
+                session_record["_fresh"] = True
                 session_record["_csrf_token"] = csrf_token
             outcome["response"] = thread_client.post(
                 f"/e/{action_token}/{action_path}",
@@ -1720,10 +1765,14 @@ def test_account_delete_serializes_inflight_web_actions(
         blocked_owner_guard,
     )
 
+    actor_session_id = _confirmation_actor_session_id(app)
+
     def write_action():
         with app.test_client() as thread_client:
             csrf_token = f"race-{action_path}-csrf"
             with thread_client.session_transaction() as sess:
+                sess["_user_id"] = actor_session_id
+                sess["_fresh"] = True
                 sess["_csrf_token"] = csrf_token
             outcomes["write"] = thread_client.post(
                 f"/e/{action_token}/{action_path}",

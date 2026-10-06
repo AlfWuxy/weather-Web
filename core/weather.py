@@ -710,22 +710,24 @@ def get_weather_with_cache(location, ttl_minutes=None, cache_only=True):
 
 
 def get_fallback_weather_data():
-    """默认天气数据（用于异常兜底）"""
+    """生产源不可用时只返回未知字段，演示数据由显式 demo 入口提供。"""
+    from services.missing_policy import input_state
+    fields = ('temperature', 'temperature_max', 'temperature_min', 'humidity',
+              'pressure', 'wind_speed', 'pm25', 'aqi')
     return {
-        'temperature': 20,
-        'temperature_max': 25,
-        'temperature_min': 15,
-        'humidity': 60,
-        'pressure': 1013,
-        'weather_condition': '未知',
-        'wind_speed': 2.0,
-        'pm25': 35,
-        'aqi': 50,
+        **dict.fromkeys(fields),
+        'weather_condition': '数据不可用',
         'air_quality_available': False,
         'air_observed_at': None,
+        'observed_at': None,
         'location': DEFAULT_CITY_LABEL,
-        'is_mock': True,
-        'data_source': 'Mock',
+        'is_mock': False,
+        'available': False,
+        'status': 'unknown',
+        'data_source': 'Unavailable',
+        'reason': 'all_weather_sources_unavailable',
+        'input_states': {field: input_state(None, source='Unavailable', reason='source_unavailable')
+                         for field in fields},
     }
 
 

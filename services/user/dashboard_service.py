@@ -296,9 +296,11 @@ def _flat_metric_series(value, length=30):
 
 def _dashboard_metric_cards(user_id):
     """构造首页健康指标动效卡，只使用家庭成员画像中的已登记数值。"""
+    from services.account_service import has_health_consent
     members = FamilyMember.query.filter_by(user_id=user_id).order_by(
         FamilyMember.created_at.desc()
     ).all()
+    members = [member for member in members if has_health_consent(member)]
     if not members:
         return []
 
@@ -396,6 +398,7 @@ def _dashboard_forecast_days(location, start_date, current_weather=None):
 
 def user_dashboard(force_elder=False):
     """用户仪表板"""
+    from services.account_service import has_health_consent
     elder_mode = force_elder or (
         request.args.get('mode') == 'elder'
         and current_app.config.get('FEATURE_ELDER_MODE')
@@ -516,12 +519,25 @@ def user_dashboard(force_elder=False):
             alert_locations,
         )
 
-    # 获取最新风险评估
+    # 按资料主体核验同意；照护人同意不能替代成员同意。
+    consented_member_ids = []
+    user_health_consent = False
+    if not is_guest:
+        user_health_consent = has_health_consent(current_user)
+        consented_member_ids = [member.id for member in FamilyMember.query.filter_by(
+            user_id=current_user.id
+        ).all() if has_health_consent(member)]
+
+    # 获取最新已授权主体的风险评估；游客继续使用隔离示例。
     if is_guest:
         latest_assessment = get_guest_assessment()
     else:
-        latest_assessment = HealthRiskAssessment.query.filter_by(
-            user_id=current_user.id
+        latest_assessment = HealthRiskAssessment.query.filter(
+            HealthRiskAssessment.user_id == current_user.id,
+            or_(
+                HealthRiskAssessment.member_id.in_(consented_member_ids),
+                and_(HealthRiskAssessment.member_id.is_(None), user_health_consent),
+            ),
         ).order_by(HealthRiskAssessment.assessment_date.desc()).first()
 
     assessment_explain = {}
@@ -551,18 +567,22 @@ def user_dashboard(force_elder=False):
     reminders = []
     if not is_guest and qweather_production_ready and weather:
         now = utcnow()
-        reminders_query = MedicationReminder.query.filter_by(
-            user_id=current_user.id,
-            is_active=True
+        reminders_query = MedicationReminder.query.filter(
+            MedicationReminder.user_id == current_user.id,
+            MedicationReminder.is_active.is_(True),
+            or_(
+                MedicationReminder.member_id.in_(consented_member_ids),
+                and_(MedicationReminder.member_id.is_(None), user_health_consent),
+            ),
         ).all()
         updated = False
         for reminder in reminders_query:
             if reminder.member_id:
                 member = FamilyMember.query.filter_by(id=reminder.member_id, user_id=current_user.id).first()
-                if not member or not member.chronic_diseases:
+                if not has_health_consent(member) or not member.chronic_diseases:
                     continue
             else:
-                if not current_user.has_chronic_disease:
+                if not user_health_consent or not current_user.has_chronic_disease:
                     continue
             triggered, reason = reminder_triggered(reminder, weather)
             if triggered:
@@ -598,7 +618,8 @@ def user_dashboard(force_elder=False):
         emergency_contact = None
         if not is_guest:
             profiles = FamilyMemberProfile.query.join(FamilyMember).filter(
-                FamilyMember.user_id == current_user.id
+                FamilyMember.user_id == current_user.id,
+                FamilyMember.id.in_(consented_member_ids),
             ).all()
             for profile in profiles:
                 contact = safe_json_loads(profile.contact_prefs, {})
@@ -628,6 +649,7 @@ def user_dashboard(force_elder=False):
             heat_result=heat_result,
             heat_risk_label=heat_risk_label,
             heat_actions=heat_actions,
+            alerts=[_dashboard_alert_card(alert, now=alert_now) for alert in alerts],
             is_guest=is_guest
         )
 

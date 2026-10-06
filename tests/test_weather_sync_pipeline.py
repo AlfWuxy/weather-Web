@@ -143,8 +143,8 @@ def test_qweather_failures_try_openmeteo_before_mock(monkeypatch, response):
     assert fallback_calls == ['都昌']
 
 
-def test_qweather_and_openmeteo_failure_then_use_mock(monkeypatch):
-    """两个真实 API 都失败后才允许返回 Mock。"""
+def test_qweather_and_openmeteo_failure_returns_unavailable(monkeypatch):
+    """两个真实 API 都失败后返回不可用，禁止进入 Mock。"""
     from services import weather_service as weather_module
 
     service = weather_module.WeatherService()
@@ -159,9 +159,9 @@ def test_qweather_and_openmeteo_failure_then_use_mock(monkeypatch):
     )
     monkeypatch.setattr(weather_module, '_record_external_api_timing', lambda *_args: None)
     monkeypatch.setattr(service, '_get_openmeteo_weather', lambda _city: None)
-    monkeypatch.setattr(service, '_get_mock_weather', lambda: mock_weather)
+    monkeypatch.setattr(service, '_get_mock_weather', lambda: pytest.fail('生产失败不得生成Mock'))
 
-    assert service.get_current_weather('都昌') == mock_weather
+    assert service.get_current_weather('都昌') is None
 
 
 def test_qweather_budget_guard_blocks_http_and_uses_fallback(monkeypatch):

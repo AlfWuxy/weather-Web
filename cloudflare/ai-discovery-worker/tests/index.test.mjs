@@ -37,7 +37,7 @@ test("robots 允许公开抓取并保留私密路径与内容用途边界", asyn
     response.headers.get("x-yilao-edge-discovery"),
     EDGE_VERSION,
   );
-  assert.equal(EDGE_REVISION, "public-pages-6-heat-map");
+  assert.equal(EDGE_REVISION, "algorithm-integrity-structural-map");
   assert.equal(
     response.headers.get("x-yilao-edge-discovery-revision"),
     EDGE_REVISION,
@@ -105,6 +105,8 @@ test("llms 摘要只列公开页面并明确隐私边界", async () => {
   }
   assert.ok(!body.includes("https://yilaoweather.org/admin"));
   assert.ok(!body.includes("https://yilaoweather.org/community-risk"));
+  assert.match(body, /实时天气风险仅在县级展示/);
+  assert.match(body, /仅覆盖一个夏季/);
   assert.ok(
     body.includes(
       "https://yilaoweather.org/duchang-heat-vulnerability-map",

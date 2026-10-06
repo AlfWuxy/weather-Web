@@ -9,6 +9,13 @@ import pytest
 from blueprints.admin import _parse_cooling_coordinates
 
 
+def _service_verified_resource(**kwargs):
+    """原坐标回归先满足独立的服务核验门槛。"""
+    from core.db_models import CoolingResource
+    from services.miniprogram_service import utcnow
+    return CoolingResource(last_verified_at=utcnow(), verify_method='onsite', **kwargs)
+
+
 @pytest.mark.parametrize(
     ("latitude", "longitude"),
     [
@@ -51,7 +58,7 @@ def test_public_cooling_resource_declares_gcj02_contract(client, db_session):
     from core.time_utils import utcnow
 
     db_session.add(
-        CoolingResource(
+        _service_verified_resource(
             community_code="测试社区",
             name="已核验纳凉点",
             latitude=29.27,
@@ -86,7 +93,7 @@ def test_miniprogram_hides_expired_or_future_verified_coordinates(
     now = utcnow()
     db_session.add_all(
         [
-            CoolingResource(
+            _service_verified_resource(
                 community_code="测试社区",
                 name="有效坐标",
                 latitude=29.27,
@@ -96,7 +103,7 @@ def test_miniprogram_hides_expired_or_future_verified_coordinates(
                 coordinate_verified_at=now - timedelta(days=1),
                 is_active=True,
             ),
-            CoolingResource(
+            _service_verified_resource(
                 community_code="测试社区",
                 name="过期坐标",
                 latitude=29.28,
@@ -106,7 +113,7 @@ def test_miniprogram_hides_expired_or_future_verified_coordinates(
                 coordinate_verified_at=now - timedelta(days=366),
                 is_active=True,
             ),
-            CoolingResource(
+            _service_verified_resource(
                 community_code="测试社区",
                 name="异常未来坐标",
                 latitude=29.29,
@@ -185,7 +192,7 @@ def test_miniprogram_coordinate_verification_time_boundaries(
         lambda: REFERENCE_NOW,
     )
     db_session.add(
-        CoolingResource(
+        _service_verified_resource(
             community_code="测试社区",
             name="坐标时间边界点位",
             latitude=29.27,
@@ -230,7 +237,7 @@ def test_public_resource_keeps_text_but_hides_unverified_coordinates(
     from core.db_models import CoolingResource
 
     db_session.add(
-        CoolingResource(
+        _service_verified_resource(
             community_code="测试社区",
             name="仅公开文字资料",
             address_hint="社区服务中心一楼",
@@ -273,7 +280,7 @@ def test_public_resource_hides_invalid_or_out_of_area_verified_coordinates(
     from core.db_models import CoolingResource
 
     db_session.add(
-        CoolingResource(
+        _service_verified_resource(
             community_code="测试社区",
             name="异常坐标点位",
             address_hint="仅保留文字地址",
@@ -344,6 +351,11 @@ def test_admin_can_create_verified_gcj02_resource(admin_client, db_session):
     assert resource.coordinate_system == "GCJ-02"
     assert resource.coordinate_source.startswith("管理员现场")
     assert resource.coordinate_verified_at is not None
+    # 坐标回执不能替代服务核验；先补上独立服务回执再验证地图坐标。
+    from core.time_utils import utcnow
+    resource.last_verified_at = utcnow()
+    resource.verify_method = 'onsite'
+    db_session.commit()
     item = admin_client.get(
         "/mp/api/v1/public/cooling-resources"
     ).get_json()["data"]["items"][0]

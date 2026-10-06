@@ -43,6 +43,8 @@ def _complete_profile(name, population, elderly_ratio, chronic_disease_ratio):
         'heat_island_index': 0.47,
         'medical_accessibility': 0.62,
         'baseline_visits': 6.0,
+        'baseline_period_days': 1,
+        'baseline_population_scope': 'all_residents',
         'uses_proxy_values': False,
     }
 

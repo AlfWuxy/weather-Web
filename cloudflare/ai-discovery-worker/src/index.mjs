@@ -6,7 +6,7 @@
  */
 
 export const EDGE_VERSION = "v1.1.1";
-export const EDGE_REVISION = "public-pages-6-heat-map";
+export const EDGE_REVISION = "algorithm-integrity-structural-map";
 export const CONTENT_SIGNAL =
   "ai-train=no, search=yes, ai-input=yes";
 
@@ -72,7 +72,7 @@ const LLMS_BODY = `# 宜老天气通
 - [主页](https://yilaoweather.org/)
 - [公开天气风险与行动建议](https://yilaoweather.org/risk)
 - [已核验避暑资源](https://yilaoweather.org/cooling)
-- [都昌县热暴露与老年人口脆弱性地图](https://yilaoweather.org/duchang-heat-vulnerability-map)
+- [都昌县历史结构脆弱性地图](https://yilaoweather.org/duchang-heat-vulnerability-map)
 - [指标透明度](https://yilaoweather.org/transparency)
 - [信任网络说明](https://yilaoweather.org/about/trust-network)
 
@@ -86,6 +86,8 @@ const LLMS_BODY = `# 宜老天气通
 - 只抓取上方公开、县域聚合或方法说明页面。
 - 不抓取登录后页面、管理后台、API、家庭与照护关系、社区私密工作区、手机号、微信身份、绑定码或用户精确位置。
 - 地表温度不是气温、体感温度或个人医疗风险评分；候选地点必须完成人工核验后才会进入正式资源页。
+- 网格展示历史结构脆弱性（人口与地表底数为 2020 年，地表温度为 2020–2024 年）；实时天气风险仅在县级展示，不据此生成实时村庄或网格风险。
+- 透明度页区分回顾性探索回测与前瞻验证；现有回顾性样本仅覆盖一个夏季，不代表生产 DLNM 或个人健康预测已获验证。
 
 English note: Public research content is de-identified and aggregated within Duchang County. Private user and community data must not be crawled.
 `;

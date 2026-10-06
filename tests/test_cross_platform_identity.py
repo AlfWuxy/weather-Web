@@ -259,6 +259,8 @@ def test_linked_web_and_miniprogram_share_the_same_health_diary_owner(
     web_user = User(username="cross_platform_diary", role="user")
     web_user.set_password("long-web-password")
     db_session.add(web_user)
+    from services.account_service import grant_health_consent
+    grant_health_consent(web_user, web_user)
     db_session.commit()
     web_user_id = int(web_user.id)
 

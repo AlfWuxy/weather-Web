@@ -10,6 +10,7 @@ from xml.sax.saxutils import escape
 
 from flask import (
     Blueprint,
+    flash,
     Response,
     abort,
     current_app,
@@ -312,7 +313,7 @@ def llms_txt():
         ('主页', '/'),
         ('公开天气风险与行动建议', '/risk'),
         ('已核验避暑资源', '/cooling'),
-        ('都昌县热暴露与老年人口脆弱性聚合地图',
+        ('都昌县历史结构脆弱性地图',
          '/duchang-heat-vulnerability-map'),
         ('指标透明度', '/transparency'),
         ('信任网络说明', '/about/trust-network'),
@@ -335,7 +336,11 @@ def llms_txt():
         '- 不抓取登录后页面、管理后台、API、家庭与照护关系、'
         '社区私密工作区、手机号、微信身份、绑定码或用户精确位置。\n'
         '- 地表温度不是气温、体感温度或个人医疗风险评分；'
-        '候选地点必须完成人工核验后才会进入正式资源页。\n\n'
+        '候选地点必须完成人工核验后才会进入正式资源页。\n'
+        '- 网格展示历史结构脆弱性（人口与地表底数为 2020 年，地表温度为 2020–2024 年）；'
+        '实时天气风险仅在县级展示，不据此生成实时村庄或网格风险。\n'
+        '- 透明度页区分回顾性探索回测与前瞻验证；现有回顾性样本仅覆盖一个夏季，'
+        '不代表生产 DLNM 或个人健康预测已获验证。\n\n'
         'English note: The map contains de-identified, modeled ~1 km '
         'research grids within Duchang County, not county-level totals '
         'or household records. Private user and community data must not '
@@ -587,7 +592,8 @@ def elder_token_debrief(token):
 @bp.route('/transparency', endpoint='transparency')
 def transparency():
     """透明度说明"""
-    return render_template('transparency.html')
+    from services.model_validation_service import get_validation_scorecard
+    return render_template('transparency.html', validation_scorecard=get_validation_scorecard())
 
 
 @bp.route('/cooling', endpoint='cooling_resources')
@@ -822,3 +828,128 @@ def wxoa_landing():
 def about_trust_network():
     """Explain the 'trust network' design logic (thesis loop)."""
     return render_template('about_trust_network.html')
+
+
+@bp.route('/account/security', methods=['GET', 'POST'])
+@login_required
+@limiter.limit('10 per hour', methods=['POST'], key_func=rate_limit_key)
+def account_security():
+    from flask_login import logout_user
+    from core.db_models import User, RecoveryDelegate, FamilyMember
+    from services.account_service import (account_write_guard, has_health_consent, reset_password,
+        audit, grant_health_consent, withdraw_health, withdraw_member, close_account)
+    from services.user.owner_write_guard import OwnerInactiveError
+    from services.account_email_service import mail_available, issue_email
+    if is_guest_user(current_user):
+        return redirect(url_for('public.login'))
+    actor_id = int(current_user.id)
+    if request.method == 'POST':
+        action = request.form.get('action')
+        target_name = request.form.get('target_username' if action == 'reset' else 'delegate_username', '').strip()
+        target = User.query.filter_by(username=target_name).first() if action in ('reset', 'delegate', 'revoke_delegate') else None
+        if action in ('reset', 'delegate', 'revoke_delegate') and target is None:
+            flash('无法验证操作者或找回授权', 'error')
+            return redirect(url_for('public.account_security'))
+        target_id = target.id if target else actor_id
+        expected_auth_version = int(current_user.auth_version)
+        try:
+            with account_write_guard(actor_id, target_id) as owners:
+                actor, target = owners[actor_id], owners[target_id]
+                if int(actor.auth_version) != expected_auth_version or not actor.check_password(request.form.get('current_password', '')):
+                    raise ValueError('当前密码不正确或登录已失效')
+                if action == 'verify_email':
+                    # 发送器自行提交令牌；owner 锁一直持有至发送完成。
+                    if not issue_email(actor, 'verify', locked=True):
+                        raise ValueError('邮件通道未启用、邮箱未填写或发送失败；未完成邮箱确认')
+                    flash('已提交邮箱确认邮件，实际投递以收到邮件为准', 'info')
+                elif action == 'grant_consent':
+                    if request.form.get('health_consent') != 'on':
+                        raise ValueError('请单独勾选健康信息同意')
+                    grant_health_consent(actor, actor)
+                elif action == 'withdraw_consent':
+                    withdraw_health(actor)
+                elif action == 'withdraw_member':
+                    member = FamilyMember.query.filter_by(id=request.form.get('member_id', type=int), user_id=actor.id).first()
+                    if member is None:
+                        abort(404)
+                    withdraw_member(member, actor)
+                elif action == 'close':
+                    if request.form.get('confirm_close') != '注销':
+                        raise ValueError('请输入“注销”确认')
+                    close_account(actor)
+                    logout_user()
+                    session.clear()
+                    flash('账号已注销，个人资料已清理', 'success')
+                    return redirect(url_for('public.index'))
+                elif action in ('delegate', 'revoke_delegate'):
+                    if target.id == actor.id or target.role not in ('user', 'caregiver'):
+                        raise ValueError('请提供有效的家属账号')
+                    row = RecoveryDelegate.query.filter_by(user_id=actor.id, delegate_id=target.id).first()
+                    if action == 'delegate':
+                        if row is None:
+                            row = RecoveryDelegate(user_id=actor.id, delegate_id=target.id, verified_at=utcnow())
+                            db.session.add(row)
+                        row.verified_at, row.revoked_at = utcnow(), None
+                    elif row:
+                        row.revoked_at = utcnow()
+                    audit(actor, action, actor)
+                elif action == 'reset':
+                    if request.form.get('new_password') != request.form.get('confirm_password'):
+                        raise ValueError('两次新密码不一致')
+                    reset_password(actor, target, request.form.get('current_password', ''), request.form.get('new_password', ''))
+                else:
+                    abort(400)
+                db.session.commit()
+                flash('设置已保存', 'success')
+        except (ValueError, OwnerInactiveError) as exc:
+            db.session.rollback()
+            flash(str(exc), 'error')
+        return redirect(url_for('public.account_security'))
+    delegates = db.session.query(User.username).join(RecoveryDelegate, RecoveryDelegate.delegate_id == User.id).filter(
+        RecoveryDelegate.user_id == actor_id, RecoveryDelegate.revoked_at.is_(None)).all()
+    members = FamilyMember.query.filter_by(user_id=actor_id).all()
+    return render_template('account_security.html', delegates=delegates, members=members, mail_available=mail_available(), health_consent_current=has_health_consent(current_user))
+
+
+@bp.route('/forgot-password', methods=['GET', 'POST'])
+@limiter.limit('5 per hour', methods=['POST'], key_func=rate_limit_key)
+def forgot_password():
+    from core.db_models import User
+    from services.account_email_service import mail_available, issue_email
+    available = mail_available()
+    if request.method == 'POST' and available:
+        email = (request.form.get('email') or '').strip().lower()[:120]
+        user = User.query.filter(db.func.lower(User.email) == email).first() if email else None
+        issue_email(user, 'reset')
+        # 不区分不存在、未验证、停用或发送失败，避免泄露注册信息。
+        flash('如果该邮箱关联有效且已验证的账号，系统会尝试发送找回邮件。请检查收件箱；没有收到可联系已授权家属。', 'info')
+    return render_template('forgot_password.html', mail_available=available)
+
+
+@bp.route('/privacy')
+def privacy():
+    return render_template('privacy.html')
+
+
+@bp.route('/account/email-token', methods=['GET', 'POST'])
+@limiter.limit('10 per hour', methods=['POST'], key_func=rate_limit_key)
+def account_email_token():
+    from services.account_email_service import consume_email
+    purpose = request.form.get('purpose') if request.method == 'POST' else request.args.get('purpose')
+    if purpose not in ('verify', 'reset'):
+        abort(400)
+    error = None
+    if request.method == 'POST':
+        try:
+            if purpose == 'reset' and request.form.get('new_password') != request.form.get('confirm_password'):
+                raise ValueError('两次新密码不一致')
+            consume_email(request.form.get('token'), purpose, request.form.get('new_password'))
+            flash('邮箱已验证' if purpose == 'verify' else '密码已重置，请重新登录', 'success')
+            return redirect(url_for('public.login'))
+        except ValueError as exc:
+            db.session.rollback()
+            error = str(exc)
+    response = make_response(render_template('account_email_token.html', purpose=purpose, error=error))
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response

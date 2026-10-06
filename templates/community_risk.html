@@ -253,6 +253,8 @@
         </div>
     </div>
 
+    <div class="alert alert-info" role="note">空间图用于结构脆弱性筛查：人口与覆盖底数为 2020 年，历史地表温度为 2020–2024 年；不是网格实时健康风险。实时天气风险仅在县级解释。风险排名采用每千居民每日超额就诊率（不是老人分母），预计额外人次/日只用于资源配置。风险分与资料置信度分别展示，低置信度不会降低风险分。</div>
+
     {% if community_data_redacted %}
     <div class="alert alert-info" role="status">
         游客预览仅显示社区名称、位置和粗粒度风险等级；人口、老龄、慢病比例与精确脆弱性数据已隐藏。
@@ -361,7 +363,7 @@
                             <div class="sub">CI宽度综合指数</div>
                         </div>
                         <div class="cr-kpi">
-                            <div class="name">预计额外就诊 {{ metric_info('expected_excess') }}</div>
+                            <div class="name">资源需求：预计额外人次/日 {{ metric_info('expected_excess') }}</div>
                             <div class="value" id="kpiExcess">--</div>
                             <div class="sub">天气增量估计</div>
                         </div>
@@ -569,7 +571,8 @@
                             <th>排名</th>
                             <th>社区</th>
                             <th>项目综合风险等级 0-4 {{ metric_info('community_risk_index') }}</th>
-                            <th>综合风险</th>
+                            <th>综合风险（0–100）</th>
+                            <th>天气超额率（人次/千居民/日） {{ metric_info('community_weather_hazard') }}</th>
                             <th>SVI分位 {{ metric_info('community_svi') }}</th>
                             <th>门诊记录 O/E [95%CI] {{ metric_info('sir') }}</th>
                             <th>平滑 O/E {{ metric_info('smoothed_sir') }}</th>
@@ -577,12 +580,12 @@
                             <th>热点显著性 {{ metric_info('gistar') }}</th>
                             <th>影响×可能性 {{ metric_info('community_impact_likelihood') }}</th>
                             <th>矩阵分值</th>
-                            <th>不确定性 {{ metric_info('uncertainty_index') }}</th>
-                            <th>预计额外就诊 {{ metric_info('expected_excess') }}</th>
+                            <th>置信度／核实优先级 {{ metric_info('uncertainty_index') }}</th>
+                            <th>资源需求：预计额外人次/日 {{ metric_info('expected_excess') }}</th>
                         </tr>
                     </thead>
                     <tbody id="detailTableBody">
-                        <tr><td colspan="13" class="text-muted">等待载入...</td></tr>
+                        <tr><td colspan="14" class="text-muted">等待载入...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1834,7 +1837,7 @@ function renderDetailTable(rankings) {
 
     if (!rankings || rankings.length === 0) {
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td colspan="13" class="text-muted">暂无可显示数据</td>';
+        tr.innerHTML = '<td colspan="14" class="text-muted">暂无可显示数据</td>';
         body.appendChild(tr);
         return;
     }
@@ -1848,6 +1851,7 @@ function renderDetailTable(rankings) {
             const unavailableCells = [
                 '未参与排名',
                 row.community || '--',
+                '数据不足',
                 '数据不足',
                 '数据不足',
                 '数据不足',
@@ -1884,6 +1888,7 @@ function renderDetailTable(rankings) {
             row.community || '--',
             `${safeText(row.heatrisk_level, '--')} (${safeText(row.heatrisk_label, '--')})`,
             formatNumber(row.risk_index, 1, '--'),
+            formatNumber(row.excess_rate_per_1000_residents_day, 2, '--'),
             formatPercent(row.svi_percentile, 1),
             `${sirText} ${ciText}`,
             formatNumber(row.smoothed_sir, 2, '--'),
@@ -1891,7 +1896,7 @@ function renderDetailTable(rankings) {
             row.hotspot_category || '--',
             `${impactLevelLabels[row.impact_bucket] || row.impact_bucket || '--'} × ${likelihoodLevelLabels[row.likelihood_bucket] || row.likelihood_bucket || '--'}`,
             safeText(row.matrix_score, '--'),
-            formatNumber(row.uncertainty_index, 1, '--'),
+            `${safeText(row.confidence_label, '资料不足')} · ${safeText(row.review_status, '待补资料')}（不确定性 ${formatNumber(row.uncertainty_index, 1, '--')}）`,
             formatNumber(row.expected_excess_visits, 1, '--')
         ];
 

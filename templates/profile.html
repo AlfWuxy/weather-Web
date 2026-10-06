@@ -6,7 +6,7 @@
 <div class="container">
     <div class="row">
         <div class="col-12 mb-4">
-            <h2><i class="bi bi-gear"></i> 个人设置</h2>
+            <h2><i class="bi bi-gear"></i> 个人设置</h2><a href="{{ url_for('public.account_security') }}">账号找回、健康同意与注销</a>
             <p class="text-muted">管理您的账户信息和健康档案</p>
         </div>
     </div>
@@ -59,17 +59,17 @@
 
                         <hr class="my-4">
 
-                        <h6 class="mb-3">健康信息</h6>
+                        <h6 class="mb-3">健康信息（选填）</h6><div class="form-check my-3"><input type="checkbox" class="form-check-input" id="health_consent" name="health_consent"><label class="form-check-label" for="health_consent">我单独同意处理选填的慢病、健康日记及用药信息，用于个人健康提醒。可随时撤回；不同意仍可查看公开天气。<a href="{{ url_for('public.privacy') }}">查看处理说明</a></label></div>
                         <div class="mb-3">
                             <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="has_chronic_disease" name="has_chronic_disease" {% if current_user.has_chronic_disease %}checked{% endif %}>
+                                <input class="form-check-input" type="checkbox" id="has_chronic_disease" name="has_chronic_disease" {% if health_consent and current_user.has_chronic_disease %}checked{% endif %}>
                                 <label class="form-check-label" for="has_chronic_disease">
                                     患有慢性疾病
                                 </label>
                             </div>
                         </div>
 
-                        <div id="chronic_diseases_section" style="display: {% if current_user.has_chronic_disease %}block{% else %}none{% endif %};">
+                        <div id="chronic_diseases_section" style="display: {% if health_consent and current_user.has_chronic_disease %}block{% else %}none{% endif %};">
                             <label class="form-label">慢性疾病类型（可多选）</label>
                             <div class="row">
                                 <div class="col-md-6 mb-2">

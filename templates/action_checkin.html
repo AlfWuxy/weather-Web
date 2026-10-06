@@ -14,10 +14,10 @@
                 <p class="text-muted mb-0">网页保留公开说明，家庭确认、求助和复盘请在微信小程序完成（不含医疗诊断/治疗建议）。</p>
                 <p class="text-muted small mt-2 mb-0">微信正式版不会在网页读取短码或家庭安全链接。网页不会读取短码、兑换安全链接或写入家庭记录。</p>
             {% else %}
-                <p class="text-muted mb-0">输入家属提供的短码，可记录今日确认或求助状态。本页不提供医疗诊断或治疗建议。</p>
-                <p class="text-muted small mt-2 mb-0">未登录者可使用照护人提供的有效短码或有时效家庭行动安全链接。只有主动提交时，行动确认、求助需求或复盘才会写入对应照护账号；该入口不等于登录，不能查看账号内其他资料。</p>
+                <p class="text-muted mb-0">输入家属提供的短码可查看与求助；确认行动完成需要登录正式账号。本页不提供医疗诊断或治疗建议。</p>
+                <p class="text-muted small mt-2 mb-0">未登录者可使用照护人提供的有效短码或有时效家庭行动安全链接。行动确认另需登录正式账号。只有主动提交时，求助需求或复盘才会写入对应照护账号；该入口不等于登录，不能查看账号内其他资料。</p>
             {% endif %}
-            <p class="mt-2 mb-0">只想用大字查看今天的天气和行动？<a href="{{ url_for('user.elder_dashboard') if current_user.is_authenticated else url_for('public.guest_login', next=url_for('user.elder_dashboard')) }}">打开大字今日页</a>。</p>
+            <p class="mt-2 mb-0">只想用大字查看今天的天气和行动？<a href="{{ url_for('user.elder_dashboard') }}">免登录打开大字今日页</a>。</p>
         </div>
     </div>
 
@@ -129,11 +129,11 @@
                         {% if heat_result and risk_label %}
                         <div class="row g-3 align-items-center">
                             <div class="col-md-7">
-                                <div class="text-muted small">当前快照风险等级</div>
+                                <div class="text-muted small">当前高温健康风险等级</div>
                                 <div class="display-4 fw-bold text-{{ heat_color }}">{{ risk_label }}</div>
                                 {% if status and status.risk_level %}
                                 <div class="mt-2 small">
-                                    <span class="badge bg-secondary">今日已观察最高风险：{{ status.risk_level }}</span>
+                                    <span class="badge bg-secondary">今日已观察最高高温风险：{{ status.risk_level }}</span>
                                     <span class="text-muted">峰值用于今日行动复盘，只升不降。</span>
                                 </div>
                                 {% endif %}
@@ -195,7 +195,7 @@
                             <strong>天气正在更新。</strong>
                             风险等级暂不显示。
                             {% if status and status.risk_level %}
-                                今日已观察最高风险：{{ status.risk_level }}；当前快照暂不可用。
+                                今日已观察最高高温风险：{{ status.risk_level }}；当前快照暂不可用。
                             {% endif %}
                             {% if web_actions_read_only %}
                                 你仍可查看避暑资源；确认、求助和复盘请前往微信小程序。
@@ -229,6 +229,11 @@
                             旧确认记录缺少有效行动项，当前不计入今日确认；请至少完成并勾选一项。
                         </div>
                         {% endif %}
+                        {% if not current_user.is_authenticated or current_user.role == 'guest' %}
+                        {% set confirm_return = url_for('public.elder_token_entry', token=token, short_code=pair.short_code) if token else url_for('public.action_check', short_code=pair.short_code) %}
+                        <a class="btn btn-success btn-lg" href="{{ url_for('public.login', next=confirm_return) }}">登录后确认行动完成</a>
+                        <p class="text-muted mt-2">登录后请重新校验短码；查看与求助可继续使用短码。</p>
+                        {% else %}
                         <form method="POST" action="{{ confirm_action or url_for('public.action_confirm') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="short_code" value="{{ pair.short_code }}">
@@ -259,6 +264,7 @@
                             </div>
                             {% endif %}
                         </form>
+                        {% endif %}
                         <hr>
                         <form method="POST" action="{{ help_action or url_for('public.action_help') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -457,7 +463,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const applyAdjust = (adjust) => {
             const level = computeLevel(score, adjust);
             if (badge) {
-                badge.textContent = level;
+                badge.textContent = '高温健康：' + level;
                 badge.className = `badge ${badgeClass[level] || 'bg-secondary'}`;
             }
         };

@@ -74,6 +74,11 @@ class HealthRiskService:
         from services.dlnm_risk_service import get_dlnm_service
         from services.weather_service import WeatherService
 
+        from services.health_input_policy import health_input_states, health_input_quality, unknown_health_result
+        quality = health_input_quality(health_input_states(user_profile, weather_data, screening or {}))
+        if quality['requires_followup']:
+            return unknown_health_result(quality)
+
         profile = self._normalize_user_profile(user_profile)
         weather = self._normalize_weather_data(weather_data)
         screening_data = self._normalize_screening(screening or {})
@@ -112,6 +117,12 @@ class HealthRiskService:
 
         # 路径 C：社区脆弱性 + 社区近期负担 + 个体基础敏感性
         community_context = self._build_community_context(profile.get('community'))
+        if community_context.get('imputed'):
+            from services.missing_policy import input_state
+            for field in community_context.get('imputed_fields', ['community_context']):
+                quality['input_states'][field] = input_state(None, source='community_context', reason='community_data_unavailable')
+            quality = health_input_quality(quality['input_states'])
+            return unknown_health_result(quality)
         community_score = self._clamp(
             0.65 * community_context['vulnerability_index'] + 0.35 * community_context['burden_score'],
             0.0,
@@ -240,6 +251,10 @@ class HealthRiskService:
         )
 
         return {
+            'status': 'complete',
+            'data_quality': quality,
+            'input_states': quality['input_states'],
+            'completeness': quality['completeness'],
             'risk_score': round(fused_score, 1),
             'risk_level': risk_level,
             'risk_interval': {

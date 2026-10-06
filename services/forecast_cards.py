@@ -136,6 +136,10 @@ def build_forecast_cards(forecast_days, health_forecasts, start_date):
             'risk_score': score,
             'risk_label': score_level(score) if risk_available else '待计算',
             'risk_available': risk_available,
+            'exposure_status': composite.get('status', 'unknown'),
+            'unknown_components': composite.get('unknown_components', []),
+            'effective_weights': composite.get('effective_weights', {}),
+            'input_states': composite_inputs,
             'risk_components': {
                 'heat': parse_float(components.get('heat')),
                 'pm25': parse_float(components.get('pm25')),

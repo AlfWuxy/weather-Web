@@ -1,0 +1,26 @@
+<section class="card h-100" data-hazard-card="rain" data-rain-card
+         data-nowcast-url="{{ url_for('api.api_weather_nowcast', location=location if location is defined else (weather_source_city or current_location), hours=6) }}">
+    <div class="card-body">
+        <h2 class="h5">降雨出行</h2>
+        <p class="fw-semibold mb-1" data-rain-amount>时段雨量预报：未知</p>
+        <p class="mb-1" data-rain-intensity>小时雨强：未知</p>
+        <p class="mb-1" data-rain-probability>最高降雨概率：未知</p>
+        <p class="small text-muted mb-1" data-rain-window>统计时段：未知</p>
+        <p class="small text-muted" data-rain-source>数据来源：未知</p>
+        <details data-rain-details hidden>
+            <summary>查看逐小时雨量与概率</summary>
+            <div class="table-responsive"><table class="table table-sm small mt-2">
+                <thead><tr><th scope="col">累计时段（北京时间）</th><th scope="col">雨量</th><th scope="col">平均雨强</th><th scope="col">降雨概率</th></tr></thead>
+                <tbody data-rain-rows></tbody>
+            </table></div>
+        </details>
+        <details class="small text-muted mt-2">
+            <summary>雨量和等级怎么算</summary>
+            <p class="mb-1">液态雨量为雨与阵雨之和，不含雪。每条数据是标注时刻之前一小时的累计量；仅在小时连续且完整时计算时段合计。</p>
+            <p class="mb-1">小时平均雨强按数值分为：0 为未预报到降雨；大于 0 且不超过 2.54 mm/h 为弱；大于 2.54 且不超过 7.62 mm/h 为中；大于 7.62 mm/h 为强。该分档参考美国气象局的小时雨强界线，不能用作中国 24 小时雨量等级或官方预警等级。</p>
+            <p><a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer">Open-Meteo 数据定义</a> · <a href="https://www.weather.gov/asos/PresentWeatherSensor.html" target="_blank" rel="noopener noreferrer">NWS 小时雨强参考</a></p>
+        </details>
+        <p class="small mb-0 mt-2">小时预报可能变化；未知不表示无雨，未预报到降雨也不表示没有积水或洪涝风险。出门前留意官方预警，勿涉水通行。</p>
+    </div>
+</section>
+<script src="{{ url_for('static', filename='js/rain-card.js') }}" defer></script>

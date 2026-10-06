@@ -171,13 +171,22 @@ def test_home_copy_is_capability_focused_and_community_icon_exists(client):
     assert '页面只把需要行动的部分放到前面' not in body
 
 
-def test_anonymous_elder_card_enters_guest_elder_mode(client):
+def test_anonymous_elder_card_opens_public_county_without_guest_identity(client, db_session, monkeypatch):
+    monkeypatch.setattr('services.public_service.get_bootstrap_payload', lambda: {
+        'location': {'name': '都昌县'}, 'risk': {'available': False},
+    })
     body = client.get('/').get_data(as_text=True)
-    assert 'href="/guest?next=/elder-mode" class="yl-role-card variant-elder"' in body
+    assert 'href="/elder-mode" class="yl-role-card variant-elder"' in body
 
-    response = client.get('/guest?next=/elder-mode', follow_redirects=False)
-    assert response.status_code == 302
-    assert response.headers['Location'].endswith('/elder-mode')
+    response = client.get('/elder-mode', follow_redirects=False)
+    assert response.status_code == 200
+    elder_body = response.get_data(as_text=True)
+    assert 'public-elder' in elder_body and '大字版' in elder_body
+    for hazard in ('official', 'heat', 'rain', 'cold'):
+        assert elder_body.count(f'data-hazard-card="{hazard}"') == 1
+    assert '时段雨量预报：未知' in elder_body
+    with client.session_transaction() as session:
+        assert '_user_id' not in session and 'guest_id' not in session
 
 
 def test_community_navigation_has_one_workspace_entry_per_view(client, db_session):

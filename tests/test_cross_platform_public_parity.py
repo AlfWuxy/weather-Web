@@ -97,7 +97,7 @@ def test_web_and_bootstrap_share_persisted_risk_actions_and_reminder(
     reminder = bootstrap["family_reminder"]
 
     assert risk["score"] is not None
-    assert f"当前风险：{risk['level']}" in body
+    assert f"高温健康：{risk['level']}" in body
     assert f"综合评分 {risk['score']}" in body
     for action in bootstrap["actions"]:
         assert action["title"] in body
@@ -144,7 +144,7 @@ def test_unavailable_persisted_weather_degrades_both_surfaces_safely(
     assert bootstrap["risk"]["score"] is None
     assert bootstrap["actions"] == []
     assert "天气更新中" in body
-    assert "当前风险：" not in body
+    assert 'id="heatRiskAdjust"' not in body
     assert reminder["message"] in body
     assert reminder["follow_up_question"] in body
     assert reminder["date"] in body
@@ -184,7 +184,7 @@ def test_partial_weather_fails_closed_for_web_and_miniprogram(
     assert bootstrap["risk"]["level"] == "未知"
     assert bootstrap["actions"] == []
     assert "天气更新中" in body
-    assert "当前风险：" not in body
+    assert 'id="heatRiskAdjust"' not in body
 
 
 def test_fresh_snapshot_keeps_persisted_risk_and_actions(

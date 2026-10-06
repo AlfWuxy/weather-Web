@@ -10,6 +10,7 @@ from flask import Blueprint, current_app, flash, redirect, render_template, requ
 from flask_login import current_user, login_required
 from sqlalchemy.exc import SQLAlchemyError
 
+from core.extensions import limiter
 from core.extensions import db
 from core.audit import log_audit
 from core.db_models import (
@@ -648,6 +649,7 @@ def admin_delete_user(user_id):
 
 @bp.route('/admin/user/<int:user_id>/edit', methods=['GET', 'POST'], endpoint='admin_edit_user')
 @login_required
+@limiter.limit('10 per hour', methods=['POST'])
 def admin_edit_user(user_id):
     """编辑用户"""
     if current_user.role != 'admin':
@@ -724,25 +726,21 @@ def admin_edit_user(user_id):
             validated_password = result
 
         try:
-            with serialized_admin_role_change(user_id, role) as locked_user:
+            from services.account_service import account_owner_locks
+            with account_owner_locks(current_user.id, user_id), serialized_admin_role_change(user_id, role) as locked_user:
                 if validated_password:
+                    from services.account_service import revoke_tokens, audit
+                    actor = db.session.get(User, int(current_user.id), populate_existing=True)
+                    if actor is None or not actor.is_active or actor.role != 'admin' or not actor.check_password(request.form.get('current_password', '')):
+                        flash('请重新验证管理员当前密码', 'error')
+                        return redirect(url_for('admin.admin_edit_user', user_id=user_id))
                     locked_user.set_password(validated_password)
-                    locked_user.auth_version = int(locked_user.auth_version) + 1
-                    revoked_at = utcnow()
-                    ApiToken.query.filter(
-                        ApiToken.user_id == locked_user.id,
-                        ApiToken.revoked_at.is_(None),
-                    ).update(
-                        {ApiToken.revoked_at: revoked_at},
-                        synchronize_session=False,
-                    )
-                    MiniProgramSession.query.filter(
-                        MiniProgramSession.user_id == locked_user.id,
-                        MiniProgramSession.revoked_at.is_(None),
-                    ).update(
-                        {MiniProgramSession.revoked_at: revoked_at},
-                        synchronize_session=False,
-                    )
+                    revoke_tokens(locked_user)
+                    audit(actor, 'password_reset_admin', locked_user)
+                if locked_user.email != email:
+                    from core.db_models import AccountEmailToken
+                    locked_user.email_verified_at = None
+                    AccountEmailToken.query.filter_by(user_id=locked_user.id, used_at=None).update({'used_at': utcnow()}, synchronize_session=False)
 
                 locked_user.username = username
                 locked_user.email = email

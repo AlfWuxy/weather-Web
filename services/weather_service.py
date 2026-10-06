@@ -8,6 +8,7 @@ import math
 import os
 import requests
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import json
 import time
 from statistics import mean, pstdev
@@ -146,7 +147,7 @@ class WeatherService:
         return lon, lat
 
     def _get_fallback_weather(self, city, logger=None):
-        """按 Open-Meteo、Mock 的顺序返回兜底天气。"""
+        """使用 Open-Meteo 备用源；全部失败则返回不可用。"""
         logger = logger or logging.getLogger(__name__)
         if self.use_openmeteo_fallback:
             logger.info("尝试使用Open-Meteo备用API...")
@@ -154,8 +155,8 @@ class WeatherService:
             if openmeteo_result:
                 return openmeteo_result
 
-        logger.error("所有天气API均失败，使用模拟数据")
-        return self._get_mock_weather()
+        logger.error("所有天气API均失败，天气数据不可用")
+        return None
     
     def get_current_weather(
         self,
@@ -165,7 +166,7 @@ class WeatherService:
         allow_fallback=True,
     ):
         """
-        获取当前天气数据，依次尝试和风天气、Open-Meteo 与模拟数据。
+        获取当前天气数据，依次尝试和风天气与 Open-Meteo。
 
         后台统一快照周期会把 include_enrichment 设为 False，避免在实况请求内
         重复拉取七日预报和空气质量。正式烟测同时关闭 allow_fallback，确保
@@ -397,6 +398,11 @@ class WeatherService:
                 aqi = self._safe_float(local_index.get('aqi'))
                 if aqi is not None and math.isfinite(aqi) and 0 <= aqi <= 500:
                     result['aqi'] = int(round(aqi))
+                    result['aqi_index_code'] = local_index.get('code')
+                    primary = local_index.get('primaryPollutant')
+                    result['primary_pollutant'] = primary.get('code') if isinstance(primary, dict) else None
+                    # 指数代码不等于标准版本，未声明 HJ633 年份时不允许反算浓度。
+                    result['aqi_standard'] = None
                 category = str(local_index.get('category') or '').strip()
                 if category:
                     result['air_quality'] = category
@@ -414,8 +420,10 @@ class WeatherService:
             pm25 = self._safe_float(
                 concentration.get('value') if isinstance(concentration, dict) else None
             )
-            if pm25 is not None and math.isfinite(pm25) and pm25 >= 0:
+            unit = concentration.get('unit') if isinstance(concentration, dict) else None
+            if pm25 is not None and math.isfinite(pm25) and pm25 >= 0 and unit in {'μg/m3', 'µg/m3', 'ug/m3', 'μg/m³', 'µg/m³'}:
                 result['pm25'] = pm25
+                result['pm25_unit'] = 'μg/m³'
             metadata = payload.get('metadata')
             metadata = metadata if isinstance(metadata, dict) else {}
             air_now = payload.get('now')
@@ -813,12 +821,12 @@ class WeatherService:
         基于多模型离散度 + 提前期估计可预报性（0-100）。
         spread 越大，lead_day 越远，可预报性越低。
         """
-        try:
-            spread_v = max(0.0, float(spread))
-        except Exception:
-            spread_v = 0.0
+        spread_v = self._safe_float(spread)
+        if spread_v is not None and (not math.isfinite(spread_v) or spread_v < 0):
+            spread_v = None
         day_penalty = max(0, int(lead_day) - 1) * 3.0
-        score = max(5.0, min(99.0, 100.0 - spread_v * 16.0 - day_penalty))
+        raw = 60.0 - day_penalty if spread_v is None else 100.0 - spread_v * 16.0 - day_penalty
+        score = max(5.0, min(60.0 if spread_v is None else 99.0, raw))
         if score >= 75:
             label = '高'
         elif score >= 50:
@@ -1127,14 +1135,14 @@ class WeatherService:
             if om:
                 model_entries.append(om.get('temperature_mean'))
                 model_names.append('Open-Meteo')
-            model_means = [self._safe_float(v) for v in model_entries if self._safe_float(v) is not None]
+            model_means = [value for v in model_entries if (value := self._bounded_float(v, -90.0, 60.0)) is not None]
             if not model_means:
                 continue
 
             ensemble_mean = mean(model_means)
-            ensemble_std = pstdev(model_means) if len(model_means) > 1 else 0.0
-            p10 = ensemble_mean - 1.2816 * ensemble_std
-            p90 = ensemble_mean + 1.2816 * ensemble_std
+            ensemble_std = pstdev(model_means) if len(model_means) > 1 else None
+            p10 = ensemble_mean - 1.2816 * ensemble_std if ensemble_std is not None else None
+            p90 = ensemble_mean + 1.2816 * ensemble_std if ensemble_std is not None else None
 
             # 对昼夜温差做平均，以便保留 max/min 兼容字段
             ranges = []
@@ -1145,7 +1153,9 @@ class WeatherService:
                 tmin = self._safe_float(src.get('temperature_min'))
                 if tmax is not None and tmin is not None:
                     ranges.append(max(2.0, tmax - tmin))
-            diurnal_range = mean(ranges) if ranges else 8.0
+            if not ranges:
+                continue
+            diurnal_range = mean(ranges)
             tmax_ens = ensemble_mean + diurnal_range / 2
             tmin_ens = ensemble_mean - diurnal_range / 2
 
@@ -1157,14 +1167,19 @@ class WeatherService:
                 'temperature_max': round(tmax_ens, 1),
                 'temperature_min': round(tmin_ens, 1),
                 'temperature_ensemble_mean': round(ensemble_mean, 2),
-                'temperature_ensemble_p10': round(p10, 2),
+                'temperature_ensemble_p10': round(p10, 2) if p10 is not None else None,
                 'temperature_ensemble_p50': round(ensemble_mean, 2),
-                'temperature_ensemble_p90': round(p90, 2),
-                'temperature_ensemble_std': round(ensemble_std, 3),
+                'temperature_ensemble_p90': round(p90, 2) if p90 is not None else None,
+                'temperature_ensemble_std': round(ensemble_std, 3) if ensemble_std is not None else None,
                 'model_count': len(model_means),
                 'model_names': model_names,
                 'predictability_score': predictability_score,
                 'predictability_label': predictability_label,
+                'predictability_branch': 'lead_only' if ensemble_std is None else 'derived',
+                'predictability_validated': False,
+                'predictability_source': 'local_weather_service',
+                'predictability_method': 'lead_only' if ensemble_std is None else 'ensemble_spread_heuristic',
+                'predictability_calibration_status': 'unvalidated',
                 'condition': (qw or om or {}).get('condition', '多云'),
                 'condition_night': (qw or om or {}).get('condition_night', '多云'),
                 'humidity': (qw or om or {}).get('humidity'),
@@ -1180,7 +1195,7 @@ class WeatherService:
         return merged
 
     def get_short_term_nowcast(self, city="都昌", hours=6):
-        """获取未来小时级降水时间轴（短临交互数据）。"""
+        """获取小时级预报降水时间轴，各总量以区间结束时刻标记。"""
         logger = logging.getLogger(__name__)
         hours = max(1, min(int(hours or 6), 24))
         location = self._get_location(city)
@@ -1199,7 +1214,8 @@ class WeatherService:
             params = {
                 'latitude': lat,
                 'longitude': lon,
-                'hourly': 'precipitation_probability,precipitation,temperature_2m,weather_code',
+                'hourly': 'precipitation_probability,precipitation,rain,showers,temperature_2m,weather_code',
+                'precipitation_unit': 'mm',
                 'forecast_hours': hours,
                 'timezone': 'Asia/Shanghai'
             }
@@ -1218,37 +1234,65 @@ class WeatherService:
                     'timeline': []
                 }
             payload = response.json()
+            if payload.get('timezone') not in (None, 'Asia/Shanghai'):
+                return {'available': False, 'source': 'Open-Meteo', 'reason': 'unexpected_timezone', 'timeline': []}
             hourly = payload.get('hourly') or {}
             times = hourly.get('time') or []
-            pops = hourly.get('precipitation_probability') or []
-            precs = hourly.get('precipitation') or []
-            temps = hourly.get('temperature_2m') or []
-            wcodes = hourly.get('weather_code') or []
+            units = payload.get('hourly_units') or {}
+            if len(times) < hours:
+                return {'available': False, 'source': 'Open-Meteo', 'reason': 'incomplete_hourly_data', 'timeline': []}
 
-            size = min(hours, len(times), len(pops), len(precs), len(temps))
+            def hourly_value(field, index, lower, upper, unit=None):
+                values = hourly.get(field) or []
+                if index >= len(values) or (unit and units.get(field) not in (None, unit)):
+                    return None
+                return self._bounded_float(values[index], lower, upper)
+
             timeline = []
-            for i in range(size):
-                pop = self._safe_float(pops[i], 0.0) or 0.0
+            previous_end = None
+            for i in range(hours):
+                # 官方小时量是前一小时总和；显式时区避免浏览器按本机时区误解。
+                interval_end = datetime.fromisoformat(str(times[i]))
+                if interval_end.tzinfo is None:
+                    interval_end = interval_end.replace(tzinfo=ZoneInfo('Asia/Shanghai'))
+                else:
+                    interval_end = interval_end.astimezone(ZoneInfo('Asia/Shanghai'))
+                if (interval_end.minute or interval_end.second or interval_end.microsecond
+                        or previous_end is not None and interval_end - previous_end != timedelta(hours=1)):
+                    return {'available': False, 'source': 'Open-Meteo', 'reason': 'invalid_hourly_interval', 'timeline': []}
+                previous_end = interval_end
+                pop = hourly_value('precipitation_probability', i, 0.0, 100.0, '%')
+                precip = hourly_value('precipitation', i, 0.0, 1000.0, 'mm')
+                rain = hourly_value('rain', i, 0.0, 1000.0, 'mm')
+                showers = hourly_value('showers', i, 0.0, 1000.0, 'mm')
+                rainfall = rain + showers if rain is not None and showers is not None else None
+                temp = hourly_value('temperature_2m', i, -90.0, 60.0)
+                wcodes = hourly.get('weather_code') or []
                 entry = {
-                    'time': str(times[i]),
-                    'precipitation_probability': round(pop, 1),
-                    'precipitation_mm': round(self._safe_float(precs[i], 0.0) or 0.0, 2),
-                    'temperature': round(self._safe_float(temps[i], 0.0) or 0.0, 1),
+                    'time': interval_end.isoformat(timespec='minutes'),
+                    'interval_start': (interval_end - timedelta(hours=1)).isoformat(timespec='minutes'),
+                    'precipitation_probability': round(pop, 1) if pop is not None else None,
+                    'precipitation_mm': round(precip, 2) if precip is not None else None,
+                    'rainfall_mm': round(rainfall, 2) if rainfall is not None else None,
+                    'rainfall_method': 'rain_plus_showers' if rainfall is not None else None,
+                    'temperature': round(temp, 1) if temp is not None else None,
                     'condition': self._weather_code_to_text(wcodes[i] if i < len(wcodes) else None),
-                    'risk_level': '高' if pop >= 70 else '中' if pop >= 40 else '低'
+                    'risk_level': '未知' if pop is None else '高' if pop >= 70 else '中' if pop >= 40 else '低',
+                    'risk_basis': 'precipitation_probability_only',
                 }
                 timeline.append(entry)
 
-            peak = max(timeline, key=lambda x: x.get('precipitation_probability', 0), default=None)
+            known_probability = [item for item in timeline if item['precipitation_probability'] is not None]
+            peak = max(known_probability, key=lambda item: item['precipitation_probability'], default=None)
             rain_threshold = 40.0
             rain_windows = []
             current_window = None
             for item in timeline:
-                prob = self._safe_float(item.get('precipitation_probability'), 0.0) or 0.0
-                raining = prob >= rain_threshold
+                prob = item['precipitation_probability']
+                raining = prob is not None and prob >= rain_threshold
                 if raining and current_window is None:
                     current_window = {
-                        'start_time': item.get('time'),
+                        'start_time': item.get('interval_start'),
                         'end_time': item.get('time'),
                         'max_probability': prob
                     }
@@ -1269,7 +1313,16 @@ class WeatherService:
             return {
                 'available': bool(timeline),
                 'source': 'Open-Meteo',
-                'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'generated_at': datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(timespec='seconds'),
+                'timezone': 'Asia/Shanghai',
+                'precipitation_unit': 'mm',
+                'precipitation_interval_minutes': 60,
+                'precipitation_time_reference': 'interval_end',
+                'rainfall_interval_minutes': 60,
+                'rainfall_time_reference': 'interval_end',
+                'rainfall_source': 'forecast_model',
+                'probability_complete': len(known_probability) == len(timeline),
+                'rainfall_complete': all(item['rainfall_mm'] is not None for item in timeline),
                 'timeline': timeline,
                 'peak': peak,
                 'rain_window': next_rain,
@@ -1287,7 +1340,7 @@ class WeatherService:
             }
     
     def _get_mock_weather(self):
-        """获取模拟天气数据（最后备用方案）"""
+        """显式演示数据，生产获取链路不调用。"""
         import random
         temp = random.uniform(10, 25)
         return {
@@ -1310,7 +1363,7 @@ class WeatherService:
     def get_weather_forecast(self, city="都昌", days=7):
         """
         获取未来天气预报 - 使用和风天气7天预报API
-        如果API调用失败，返回模拟数据
+        如果全部API调用失败，返回空列表表示数据不可用
         """
         logger = logging.getLogger(__name__)
         # 限制最多7天
@@ -1390,9 +1443,9 @@ class WeatherService:
         if openmeteo_forecast:
             return openmeteo_forecast
 
-        # 返回模拟预报数据
-        logger.warning("所有预报源均不可用，使用模拟预报")
-        return self._get_mock_forecast(days)
+        # 失败关闭：不把随机值送入生产预测。
+        logger.warning("所有预报源均不可用")
+        return []
     
     def _get_mock_forecast(self, days=7):
         """生成模拟的天气预报数据"""
@@ -1408,6 +1461,8 @@ class WeatherService:
             
             forecast.append({
                 'date': date.strftime('%Y-%m-%d'),
+                'is_mock': True,
+                'data_source': 'Mock',
                 'temperature_max': round(base_temp + temp_variation + random.uniform(3, 8), 1),
                 'temperature_min': round(base_temp + temp_variation - random.uniform(2, 5), 1),
                 'condition': random.choice(['晴', '多云', '阴', '小雨', '晴转多云']),

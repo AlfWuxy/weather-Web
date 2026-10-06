@@ -203,6 +203,12 @@ def register_hooks(app):
         """按显式双端开关决定是否在业务处理前关闭网页私密入口。"""
         if not app.config.get('WECHAT_FORMAL_RUNTIME'):
             return None
+        # 老人大字页的匿名只读分支仅呈现县级公开信息，不创建游客身份。
+        # 已登录者仍使用原私密开关；不把整个端点加入永久白名单。
+        if (request.endpoint == 'user.elder_dashboard'
+                and request.method in ('GET', 'HEAD')
+                and not current_user.is_authenticated):
+            return None
         gate_kind = _formal_web_gate_kind(request.endpoint)
         if gate_kind is None:
             return None

@@ -45,9 +45,10 @@
     '连续高温': ((heat_result.consecutive_hot_days|string) ~ '天') if heat_result and heat_result.consecutive_hot_days is not none else '0天'
 } %}
 <div class="yl-dashboard-shell">
+    {% include 'partials/dashboard_hazards.html' %}
 
     {# ============== 今日结论屏 ============== #}
-    <section class="yl-academic-today yl-fade-up"
+    <section class="yl-academic-today yl-fade-up" data-hazard-card="heat"
              data-temp-theme="dynamic"
              data-temperature="{{ hero_temperature if hero_temperature is not none else '' }}"
              data-temp-intensity="{{ dashboard_hero_theme.intensity if dashboard_hero_theme else '' }}"
@@ -57,7 +58,7 @@
         <div class="yl-academic-grid">
             <div class="yl-academic-copy">
                 <div class="yl-today-meta-line">
-                    <span>家庭照护今日页</span>
+                    <span>家庭照护今日页 · 高温健康</span>
                     <span>{{ today_date or '今天' }}</span>
                     <span><i class="bi bi-geo-alt"></i> {{ current_location or '未设置' }}</span>
                 </div>
@@ -66,16 +67,16 @@
                         今天先把外出和补水安排好。
                     {% elif risk_level == 'medium' %}
                         今天适合提前做一点防护。
-                    {% elif not weather_available %}
+                    {% elif not weather_available or not heat_result %}
                         天气正在更新，先按日常防护安排。
                     {% else %}
-                        今天风险较低，保持日常照护。
+                        今天高温健康风险较低，仍需查看其他天气信息。
                     {% endif %}
                 </h1>
                 <p>
                     {% if weather_available %}
                         当前天气为 {{ weather.weather_condition if weather.weather_condition else '未知' }}，
-                        今日天气健康风险为 {{ heat_risk_label or '待计算' }}。先完成下方行动，需要时再查看详细指标。
+                        今日高温健康风险为 {{ heat_risk_label or '待计算' }}。先完成下方行动，需要时再查看详细指标。
                     {% else %}
                         天气正在更新，风险等级暂不显示。你仍可查看通用防护和附近避暑资源。
                     {% endif %}
@@ -149,13 +150,13 @@
                     </div>
                     <div class="yl-risk-label">
                         {% if risk_level in ['high', 'extreme'] %}
-                            高风险，优先执行今日行动
+                            高温健康高风险，优先执行今日防暑行动
                         {% elif risk_level == 'medium' %}
-                            中等风险，提前准备更稳
-                        {% elif not weather_available %}
+                            高温健康中等风险，提前准备防暑
+                        {% elif not weather_available or not heat_result %}
                             天气更新中
                         {% else %}
-                            低风险，保持日常节奏
+                            高温健康风险较低，仍需留意其他天气
                         {% endif %}
                     </div>
                 </div>

@@ -8,7 +8,7 @@
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-calendar-week"></i> 7 天天气与健康关注</span>
         <h2>接下来一周，哪几天天气需要留意？</h2>
-        <p>页面先展示逐日天气。只有来源、时效和字段都通过健康模型门禁时，才会显示地区级暴露关注分；它不使用个人慢病资料，也不是官方天气预警。</p>
+        <p>页面先展示逐日天气。只有来源、时效和字段都通过健康模型门禁时，才会显示地区级暴露关注分；缺失项保留未知，情景区间尚未通过覆盖率验证。它不使用个人慢病资料，也不是官方天气预警。</p>
     </section>
 
     <form method="GET" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
@@ -63,8 +63,8 @@
                             '湿度分项': d.risk_components.humidity if d.risk_components.humidity is not none else '--',
                             '热夜分项': d.risk_components.hot_night if d.risk_components.hot_night is not none else '--',
                             'PM2.5实际使用': ((d.pm25_used|string) ~ ' μg/m³') if d.pm25_used is not none else '--',
-                            'PM2.5来源': ('未来日直接值' if d.pm25_source == 'direct' else '当前实况复用（非未来预报）' if d.pm25_source == 'current_observation_reuse' else '未来日AQI×0.65代理' if d.pm25_source == 'aqi_proxy' else '当前实况AQI×0.65代理' if d.pm25_source == 'current_observation_aqi_proxy' else '默认AQI 50代理' if d.pm25_source == 'default_aqi_50' else '--'),
-                            'AQI代理输入': d.pm25_aqi_used if d.pm25_source in ['aqi_proxy', 'current_observation_aqi_proxy', 'default_aqi_50'] and d.pm25_aqi_used is not none else '--',
+                            'PM2.5来源': ('未来日直接值' if d.pm25_source == 'direct' else '当前实况复用（非未来预报）' if d.pm25_source == 'current_observation_reuse' else 'HJ633-2012 分段反算（日均）' if d.pm25_source == 'hj633_2012_inverse' else '空气质量未知'),
+                            'AQI代理输入': d.pm25_aqi_used if d.pm25_source in ['hj633_2012_inverse'] and d.pm25_aqi_used is not none else '--',
                             '湿度实际使用': ((d.humidity_used|string) ~ '%' ~ ('（插补）' if d.humidity_imputed else '（直接）')) if d.humidity_used is not none else '--',
                             '夜间最低温实际使用': ((d.temp_min_used|string) ~ '°C' ~ ('（插补）' if d.temp_min_imputed else '（直接）')) if d.temp_min_used is not none else '--'
                         } %}
@@ -73,9 +73,12 @@
                             {% if d.risk_available %}关注分 {{ d.risk_score }}{% else %}健康关注分待计算{% endif %}
                         </span>
                         {{ metric_info('forecast_exposure_score', forecast_context) }}
+                        {% if d.pm25_source == 'unknown' %}<div class="small text-muted">空气质量未知，未计入评分</div>{% endif %}
+                        {% if d.exposure_status == 'partial' %}<div class="small text-muted">部分资料缺失 · 按已知分项归一</div>{% endif %}
                     </div>
                     {% if d.probability_high_visits is not none or d.predictability_score is not none %}
                     <div class="text-muted mt-2" style="font-size:.72rem; line-height:1.45;">
+                        {% if d.visit_point_estimate is none and d.predictability_score is not none %}<div>就诊负荷未知：预测资料不足</div>{% endif %}
                         {% if d.probability_high_visits is not none %}
                             {% set visit_context = {
                                 '本日概率': (d.probability_high_visits|round(1)|string) ~ '%',
@@ -95,16 +98,15 @@
                             {% set predictability_context = {
                                 '本日评分': d.predictability_score|round(1),
                                 '等级': d.predictability_label or '--',
-                                '计算分支': ('上游外部分数' if d.predictability_branch == 'external' else '本地推导公式' if d.predictability_branch == 'derived' else '--'),
+                                '计算分支': ('上游外部分数' if d.predictability_branch == 'external' else '本地推导公式' if d.predictability_branch == 'derived' else '无多模型信息，仅按提前期' if d.predictability_branch == 'lead_only' else '--'),
                                 '限幅前分数': d.predictability_raw_score if d.predictability_raw_score is not none else '--',
                                 '外部分数输入': d.predictability_external_score if d.predictability_external_score is not none else '--',
                                 '模型温差': d.predictability_model_spread if d.predictability_model_spread is not none else '--',
                                 '提前天数': d.predictability_lead_day if d.predictability_lead_day is not none else '--',
                                 '模型数量': d.predictability_model_count if d.predictability_model_count is not none else '--',
-                                '提前期惩罚': d.predictability_lead_penalty if d.predictability_lead_penalty is not none else '--',
-                                '多模型奖励': d.predictability_model_bonus if d.predictability_model_bonus is not none else '--'
+                                '提前期惩罚': d.predictability_lead_penalty if d.predictability_lead_penalty is not none else '--'
                             } %}
-                            <br>预报可信度 {{ d.predictability_score|round(0) }} {{ metric_info('forecast_predictability', predictability_context) }}
+                            <br>可预报性参考分 {{ d.predictability_score|round(0) }}{% if d.predictability_branch == 'lead_only' %} · 无多模型信息{% endif %}<br>启发式评分，非实测准确率 {{ metric_info('forecast_predictability', predictability_context) }}
                         {% endif %}
                     </div>
                     {% endif %}

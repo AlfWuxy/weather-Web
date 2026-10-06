@@ -7,13 +7,14 @@ import sqlite3
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = '0034_security_budgets'
+HEAD_REVISION = ScriptDirectory(str(ROOT_DIR / 'migrations')).get_current_head()
 BASE_REVISION = '0029_wxpusher_uid_ownership'
 
 

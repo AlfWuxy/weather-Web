@@ -94,7 +94,12 @@ def _user_and_token(db_session, username):
 def _pair(db_session, user, code, *, member=None):
     from core.db_models import Pair
     from core.security import hash_short_code
+    from services.miniprogram_auth import current_privacy_version
 
+    # 成功健康流程的夹具分别声明成员同意，不把账号同意代替成员授权。
+    if member is not None and member.user_id == user.id:
+        member.health_sensitive_consented_at = utcnow()
+        member.health_sensitive_consent_version = current_privacy_version()
     record = Pair(
         caregiver_id=user.id,
         member_id=member.id if member else None,
@@ -3246,7 +3251,9 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
     public_risk = client.get("/risk")
     public_risk_body = public_risk.get_data(as_text=True)
     assert public_risk.status_code == 200
-    assert "当前风险：" in public_risk_body
+    assert "高温健康：" in public_risk_body
+    assert 'data-hazard-card="heat"' in public_risk_body
+    assert "当前风险：" not in public_risk_body
     assert "天气更新中" not in public_risk_body
 
     calls["nowcast"].clear()

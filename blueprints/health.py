@@ -35,16 +35,41 @@ from core.db_models import (
     Notification,
     Pair,
     UsageEvent,
+    User,
     WeatherData,
 )
 from services.community_daily_service import refresh_latest_community_daily_best_effort
 from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
+from services.user._common import CARE_ROLES
+from services.account_service import has_health_consent, grant_health_consent
 from utils.parsers import parse_int, parse_date, parse_float, safe_json_loads
 from utils.validators import sanitize_input, validate_gender
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('health', __name__)
+
+
+@bp.before_request
+def require_family_care_role():
+    """家庭健康域只允许明确授权的照护角色进入。"""
+    if not getattr(current_user, 'is_authenticated', False) or is_guest_user(current_user):
+        return None
+    if getattr(current_user, 'role', None) in CARE_ROLES:
+        return None
+    flash('家庭照护需使用家庭账号登录', 'error')
+    return redirect(url_for('public.role_entry'))
+
+
+def _consented_records(model):
+    from services.miniprogram_auth import current_privacy_version
+    member_ids = db.session.query(FamilyMember.id).filter(
+        FamilyMember.user_id == current_user.id,
+        FamilyMember.health_sensitive_consented_at.isnot(None),
+        FamilyMember.health_sensitive_consent_version == current_privacy_version())
+    return model.query.filter(model.user_id == current_user.id, db.or_(
+        model.member_id.in_(member_ids),
+        db.and_(model.member_id.is_(None), db.true() if has_health_consent(current_user) else db.false())))
 
 
 def _empty_family_member():
@@ -61,6 +86,11 @@ def _empty_family_member():
 
 def _apply_family_member_form(member):
     """将表单内容写回成员对象，并返回画像载荷。"""
+    from services.account_service import has_health_consent, grant_health_consent
+    health_fields = ("chronic_diseases", "chronic_disease_other", "allergies", "medications", "risk_tags", "bp_sys", "bp_dia", "blood_sugar", "heart_rate", "weight")
+    has_sensitive = any(request.form.get(key) for key in health_fields)
+    if has_sensitive and not has_health_consent(member) and request.form.get("member_health_consent") != "on":
+        return None, "请确认已获得该成员本人或法定监护人对健康信息处理的单独授权"
     member.name = sanitize_input(request.form.get('name'), max_length=50)
     member.relation = sanitize_input(request.form.get('relation'), max_length=20)
     member.age = parse_int(request.form.get('age'))
@@ -69,7 +99,7 @@ def _apply_family_member_form(member):
     member.gender = sanitize_input(raw_gender, max_length=10)
 
     chronic_diseases = _parse_chronic_diseases_from_form(request.form)
-    member.chronic_diseases = json.dumps(chronic_diseases, ensure_ascii=False) if chronic_diseases else None
+    member.chronic_diseases = json.dumps(chronic_diseases, ensure_ascii=False) if (has_health_consent(member) or request.form.get("member_health_consent") == "on") else None
 
     if not member.name:
         return None, '成员姓名不能为空'
@@ -78,12 +108,17 @@ def _apply_family_member_form(member):
     if not valid:
         return None, gender
     member.gender = gender
-    return _build_member_profile_form_payload(request.form), None
+    payload = _build_member_profile_form_payload(request.form)
+    # 未获独立同意时只保留基本成员资料，不启用健康画像。
+    if not has_health_consent(member) and request.form.get("member_health_consent") != "on":
+        payload = {"alert_enabled": False, "share_with_doctor": False, "share_with_community": False}
+    return payload, None
 
 
 def _render_family_member_form(member, profile=None, *, is_create_mode=False):
     """统一渲染新增/编辑成员表单。"""
-    chronic_diseases = safe_json_loads(getattr(member, 'chronic_diseases', None), [])
+    chronic_diseases = safe_json_loads(getattr(member, 'chronic_diseases', None), []) if has_health_consent(member) else []
+    profile = profile if has_health_consent(member) else None
     return render_template(
         'family_member_edit.html',
         member=member,
@@ -121,6 +156,8 @@ def family_members():
         try:
             with owner_write_guard(owner_user_id):
                 db.session.add(member)
+                if request.form.get("member_health_consent") == "on":
+                    grant_health_consent(member, current_user)
                 db.session.flush()
                 member_id = int(member.id)
                 db.session.add(FamilyMemberProfile(
@@ -169,13 +206,13 @@ def family_members():
         profiles = FamilyMemberProfile.query.filter(FamilyMemberProfile.member_id.in_(member_ids)).all()
     profile_map = {p.member_id: p for p in profiles}
 
-    diary_entries = HealthDiary.query.filter_by(user_id=current_user.id).order_by(HealthDiary.entry_date.desc()).all()
+    diary_entries = _consented_records(HealthDiary).order_by(HealthDiary.entry_date.desc()).all()
     last_diary_map = {}
     for entry in diary_entries:
         if entry.member_id and entry.member_id not in last_diary_map:
             last_diary_map[entry.member_id] = entry
 
-    reminders = MedicationReminder.query.filter_by(user_id=current_user.id).order_by(MedicationReminder.created_at.desc()).all()
+    reminders = _consented_records(MedicationReminder).order_by(MedicationReminder.created_at.desc()).all()
     last_reminder_map = {}
     for reminder in reminders:
         if reminder.member_id and reminder.member_id not in last_reminder_map:
@@ -187,15 +224,15 @@ def family_members():
     weather = SimpleNamespace(**weather_data) if weather_available else None
 
     member_cards = []
-    risk_counts = {'low': 0, 'medium': 0, 'high': 0}
+    risk_counts = {'low': 0, 'medium': 0, 'high': 0, 'unknown': 0}
     completion_values = []
     chronic_count = 0
     alert_trigger_count = 0
 
     for member in members:
-        profile = profile_map.get(member.id)
+        profile = profile_map.get(member.id) if has_health_consent(member) else None
         profile_ctx = profile_to_context(profile)
-        diseases = safe_json_loads(member.chronic_diseases, [])
+        diseases = safe_json_loads(member.chronic_diseases, []) if has_health_consent(member) else []
         if diseases:
             chronic_count += 1
 
@@ -227,8 +264,8 @@ def family_members():
             'profile': profile_ctx,
             'alerts': alerts,
             'today_tip': alerts[0] if alerts else None,
-            'last_diary': last_diary_map.get(member.id),
-            'last_reminder': last_reminder_map.get(member.id)
+            'last_diary': last_diary_map.get(member.id) if has_health_consent(member) else None,
+            'last_reminder': last_reminder_map.get(member.id) if has_health_consent(member) else None
         })
 
     search_query = sanitize_input(request.args.get('q'), max_length=50)
@@ -238,19 +275,21 @@ def family_members():
         if search_query:
             if search_query not in (card['name'] or '') and search_query not in (card['relation'] or ''):
                 continue
-        if risk_filter in ('low', 'medium', 'high'):
+        if risk_filter in ('low', 'medium', 'high', 'unknown'):
             if card['risk']['level'] != risk_filter:
                 continue
         filtered_cards.append(card)
 
+    # 资料未知至少按中关注顺序回访，已知高关注排在最前。
+    filtered_cards.sort(key=lambda card: ({'high': 0, 'medium': 1, 'low': 2}.get(card['risk'].get('followup_priority', card['risk']['level']), 1), not card['risk'].get('requires_followup', False), card['id']))
     relation_counts = {}
     for member in members:
         relation = member.relation or '未填写'
         relation_counts[relation] = relation_counts.get(relation, 0) + 1
 
     avg_completion = int(round(sum(completion_values) / len(completion_values))) if completion_values else 0
-    risk_chart_labels = ['低风险', '中风险', '高风险']
-    risk_chart_values = [risk_counts['low'], risk_counts['medium'], risk_counts['high']]
+    risk_chart_labels = ['常规关注', '中关注', '高关注', '风险未知']
+    risk_chart_values = [risk_counts['low'], risk_counts['medium'], risk_counts['high'], risk_counts['unknown']]
 
     return render_template(
         'family_members.html',
@@ -296,6 +335,8 @@ def family_member_new():
         try:
             with owner_write_guard(owner_user_id):
                 db.session.add(member)
+                if request.form.get("member_health_consent") == "on":
+                    grant_health_consent(member, current_user)
                 db.session.flush()
                 member_id = int(member.id)
                 db.session.add(FamilyMemberProfile(member_id=member_id, **profile_payload))
@@ -333,11 +374,6 @@ def family_member_edit(member_id):
         return redirect(url_for('health.family_member_new'))
 
     if request.method == 'POST':
-        draft = _empty_family_member()
-        profile_payload, error_message = _apply_family_member_form(draft)
-        if error_message:
-            flash(error_message, 'error')
-            return redirect(url_for('health.family_member_edit', member_id=member_id))
         owner_user_id = int(current_user.id)
         try:
             with owner_write_guard(owner_user_id):
@@ -345,8 +381,13 @@ def family_member_edit(member_id):
                     id=member_id,
                     user_id=owner_user_id,
                 ).first_or_404()
-                for field in ('name', 'relation', 'age', 'gender', 'chronic_diseases'):
-                    setattr(member, field, getattr(draft, field))
+                profile_payload, error_message = _apply_family_member_form(member)
+                if error_message:
+                    db.session.rollback()
+                    flash(error_message, 'error')
+                    return redirect(url_for('health.family_member_edit', member_id=member_id))
+                if request.form.get('member_health_consent') == 'on':
+                    grant_health_consent(member, current_user)
                 profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
                 if profile:
                     for key, value in profile_payload.items():
@@ -492,17 +533,18 @@ def family_member_detail(member_id):
 
     member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first_or_404()
     profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
+    profile = profile if has_health_consent(member) else None
     profile_ctx = profile_to_context(profile)
-    chronic_diseases = safe_json_loads(member.chronic_diseases, [])
+    chronic_diseases = safe_json_loads(member.chronic_diseases, []) if has_health_consent(member) else []
     risk = compute_member_risk(member, profile)
     completion = compute_profile_completion(member, profile)
 
-    entries = HealthDiary.query.filter_by(user_id=current_user.id, member_id=member.id).order_by(
+    entries = _consented_records(HealthDiary).filter_by(member_id=member.id).order_by(
         HealthDiary.entry_date.desc()
-    ).all()
-    reminders = MedicationReminder.query.filter_by(user_id=current_user.id, member_id=member.id).order_by(
+    ).all() if has_health_consent(member) else []
+    reminders = _consented_records(MedicationReminder).filter_by(member_id=member.id).order_by(
         MedicationReminder.created_at.desc()
-    ).all()
+    ).all() if has_health_consent(member) else []
     user_location = ensure_user_location_valid()
     weather_data, _ = get_weather_with_cache(user_location)
     weather_available = is_qweather_online_weather(weather_data)
@@ -550,6 +592,11 @@ def health_diary():
                     user_id=owner_user_id,
                 ).first() is None:
                     raise LookupError('member_not_found')
+                subject = FamilyMember.query.filter_by(id=member_id, user_id=owner_user_id).first() if member_id else db.session.get(User, owner_user_id)
+                if not has_health_consent(subject):
+                    db.session.rollback()
+                    flash('请先完成本人或成员的独立健康同意', 'error')
+                    return redirect(url_for('public.account_security'))
                 db.session.add(HealthDiary(
                     user_id=owner_user_id,
                     member_id=member_id,
@@ -574,7 +621,7 @@ def health_diary():
         return redirect(url_for('health.health_diary'))
 
     members = FamilyMember.query.filter_by(user_id=current_user.id).order_by(FamilyMember.created_at.desc()).all()
-    entries = HealthDiary.query.filter_by(user_id=current_user.id).order_by(HealthDiary.entry_date.desc()).all()
+    entries = _consented_records(HealthDiary).order_by(HealthDiary.entry_date.desc()).all()
     member_map = {member.id: member.name for member in members}
 
     entry_dates = sorted({entry.entry_date for entry in entries if entry.entry_date})
@@ -638,6 +685,11 @@ def medication_reminders():
                     user_id=owner_user_id,
                 ).first() is None:
                     raise LookupError('member_not_found')
+                subject = FamilyMember.query.filter_by(id=member_id, user_id=owner_user_id).first() if member_id else db.session.get(User, owner_user_id)
+                if not has_health_consent(subject):
+                    db.session.rollback()
+                    flash('请先完成本人或成员的独立健康同意', 'error')
+                    return redirect(url_for('public.account_security'))
                 db.session.add(MedicationReminder(
                     user_id=owner_user_id,
                     member_id=member_id,
@@ -662,7 +714,7 @@ def medication_reminders():
         flash('用药提醒已添加', 'success')
         return redirect(url_for('health.medication_reminders'))
 
-    reminders = MedicationReminder.query.filter_by(user_id=current_user.id).order_by(
+    reminders = _consented_records(MedicationReminder).order_by(
         MedicationReminder.created_at.desc()
     ).all()
     members = FamilyMember.query.filter_by(user_id=current_user.id).order_by(FamilyMember.created_at.desc()).all()

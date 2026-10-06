@@ -6,12 +6,14 @@ import sqlite3
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 import pytest
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import DBAPIError
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+HEAD_REVISION = ScriptDirectory(str(ROOT_DIR / 'migrations')).get_current_head()
 
 
 def _create_app(monkeypatch, database_path):
@@ -464,7 +466,7 @@ def test_wxpusher_ownership_migration_revokes_unproven_history(
         revision = connection.execute(
             'SELECT version_num FROM alembic_version'
         ).fetchone()[0]
-        assert revision == '0034_security_budgets'
+        assert revision == HEAD_REVISION
         columns = {
             row[1]
             for row in connection.execute('PRAGMA table_info(users)')

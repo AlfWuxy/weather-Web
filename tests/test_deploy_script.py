@@ -1671,7 +1671,9 @@ def test_formal_deploy_uploads_verified_commit_snapshot_instead_of_live_tree():
         in content
     )
     assert 'IFS= read -r VERIFIED_COMMIT < "$VERIFIED_COMMIT_FILE"' in content
-    assert 'git -C "$LOCAL_DIR" archive --format=tar "$VERIFIED_COMMIT"' in content
+    assert 'git -C "$LOCAL_DIR" archive --format=tar' in content
+    assert '--output="$LOCAL_DEPLOY_TEMP_DIR/release-source.tar" "$VERIFIED_COMMIT"' in content
+    assert 'tar -xf "$LOCAL_DEPLOY_TEMP_DIR/release-source.tar" -C "$LOCAL_RELEASE_EXPORT_DIR"' in content
     assert 'RELEASE_SOURCE_DIR="$LOCAL_RELEASE_EXPORT_DIR"' in content
     assert '$NEW_RELEASE/private-metadata/source-commit.txt' in content
     assert (
@@ -3500,3 +3502,27 @@ DEPLOY_REQUIRE_WECHAT_READY=0
     assert result.returncode == 64
     assert 'Git 工作树保持干净' in result.stderr
     assert not remote_log.exists()
+
+
+@pytest.mark.parametrize('interface', ['', 'en0'])
+def test_deploy_origin_interface_is_only_local_probe_argument(interface):
+    content = _load_deploy_script()
+    assert 'DEPLOY_ORIGIN_PROBE_INTERFACE|' in content
+    start = content.index('verify_deployment_boundary() {')
+    end = content.index('\necho "步骤1:', start)
+    function = content[start:end]
+    prefix = '''set -eu
+SCRIPT_DIR=/fixture
+PUBLIC_DEPLOY_ORIGIN=https://site.example
+remote_exec_with_file_stdin() { printf 'remote:%s\\n' "$*" >&2; printf '{}'; }
+python3() { printf 'local:%s\\n' "$*"; cat >/dev/null; }
+'''
+    result = subprocess.run(['bash', '-c', prefix + function + '\nverify_deployment_boundary'],
+                            env={**os.environ, 'DEPLOY_ORIGIN_PROBE_INTERFACE': interface},
+                            text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == 'remote:/fixture/deployment_boundary.py python3 - origin\n'
+    expected = 'local:/fixture/deployment_boundary.py public --origin https://site.example --with-origin-evidence'
+    if interface:
+        expected += ' --origin-probe-interface en0'
+    assert result.stdout.strip() == expected

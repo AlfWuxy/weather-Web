@@ -27,8 +27,9 @@
                             <h5 class="mb-1">基础信息</h5>
                             <div class="text-muted">{{ member.gender or '-' }} · {{ member.age or '-' }}岁</div>
                         </div>
-                        <span class="badge risk-badge risk-{{ risk.level }}">{{ risk.label }}</span>
-                        {{ metric_info('member_risk_score', {'本次得分': risk.score, '原因': risk.reasons|join('、') if risk.reasons else '暂无加分原因'}) }}
+                        <span class="badge risk-badge risk-{{ risk.level }}">{{ {'high': '高关注', 'medium': '中关注', 'low': '常规关注', 'unknown': '风险未知 · 待回访'}.get(risk.level, '待完善') }}</span>
+                        {% if risk.requires_followup %}<p>资料不足，风险未知，已进入至少中关注的回访顺序。</p>{% endif %}
+                        {{ metric_info('member_risk_score', {'本次得分': risk.score, '原因': risk.reasons|join('、') if risk.reasons else '资料不足或暂无已知因素'}) }}
                     </div>
                     <div class="mt-3">
                         <div class="text-muted small mb-1">风险原因</div>

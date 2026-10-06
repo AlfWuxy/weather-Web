@@ -131,6 +131,7 @@ def test_verified_locations_do_not_join_existing_formal_map_points(location_cand
         community_code="都昌", name="现有正式避暑资源", is_active=True,
         latitude=29.27, longitude=116.20, coordinate_system="GCJ-02",
         coordinate_source="管理员现场核验", coordinate_verified_at=utcnow(),
+        last_verified_at=utcnow(), verify_method="onsite",
     )
     db_session.add(resource)
     db_session.commit()

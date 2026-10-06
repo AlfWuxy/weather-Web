@@ -47,7 +47,7 @@ def test_ci_uses_pinned_actions_and_locked_dependencies() -> None:
         assert f"uses: actions/setup-python@{SETUP_PYTHON_SHA}" in job
         assert LOCKED_INSTALL in job
     assert f"uses: actions/setup-node@{SETUP_NODE_SHA}" in web_js_job
-    assert "node --test tests/*.test.js tests/js/*.test.mjs" in web_js_job
+    assert "node --test tests/*.test.js tests/*.test.cjs tests/js/*.test.mjs" in web_js_job
     assert "@v6" not in workflow
     assert "@v7" not in workflow
     assert "pip install --upgrade pip" not in workflow

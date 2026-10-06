@@ -3,6 +3,7 @@
 {% block title %}健康评估 · 宜老天气通{% endblock %}
 
 {% block content %}
+{% if current_user.role == "guest" %}<div class="alert alert-info" role="note">游客演示样例：健康资料仅保存在本次临时体验中，不进入正式用户档案或实际风险报告。</div>{% endif %}
 <div class="container" style="max-width:900px;">
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-clipboard-pulse"></i> 健康评估</span>
@@ -19,6 +20,7 @@
         <div class="progress"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
     </div>
 
+    {% if health_consent %}
     <form method="POST" action="{{ url_for('user.health_assessment') }}" id="assessForm" class="yl-fade-up yl-fade-up-d2">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
@@ -77,6 +79,9 @@
             <button type="submit" class="btn btn-primary"><i class="bi bi-check2-circle me-1"></i>提交评估</button>
         </div>
     </form>
+    {% else %}
+    <div class="alert alert-secondary" role="status">填写健康资料前，请先单独同意健康信息处理。<a href="{{ health_consent_url }}">前往同意设置</a></div>
+    {% endif %}
 
     <section class="yl-section yl-fade-up yl-fade-up-d3 mt-4">
         <div class="section-heading mb-3">
@@ -102,6 +107,10 @@
             '区间上界': risk_interval.get('high', '--'),
             '不确定性': risk_interval.get('label', '--')
         } %}
+        {% set quality = assessment_academic.get('data_quality', {}) %}
+        {% if quality.get('requires_followup') %}
+        <div class="alert alert-warning" role="status">风险未知。资料完整度 {{ quality.get('completeness', 0) }}%；请补充资料并安排回访。回访优先级至少为中，并非已判定中风险。</div>
+        {% endif %}
         <div class="row g-3">
             <div class="col-md-4">
                 <div class="card h-100 border-0 shadow-sm">
@@ -279,6 +288,7 @@
 
 <script>
 (function(){
+    if (!document.getElementById('assessForm')) return;
     const total = {{ questions|length }};
     function syncGroup(name) {
         document.querySelectorAll(`.assess-opt[name="${name}"]`).forEach(input => {

@@ -51,6 +51,7 @@ Page({
     genderOptions: GENDER_OPTIONS,
     genderIndex: 0,
     chronicText: '',
+    healthConsent: false,
     fixedLocation: FIXED_LOCATION,
     contextReady: false,
     loadError: '',
@@ -144,6 +145,7 @@ Page({
       gender: '未填写',
       genderIndex: 0,
       chronicText: '',
+      healthConsent: false,
       contextReady: false,
       loadError: '',
       loading: false,
@@ -168,6 +170,7 @@ Page({
       gender: '未填写',
       genderIndex: 0,
       chronicText: '',
+      healthConsent: false,
       contextReady: false,
       loadError: '',
       loading: true,
@@ -229,6 +232,7 @@ Page({
       gender: '未填写',
       genderIndex: 0,
       chronicText: '',
+      healthConsent: false,
       contextReady: false,
       loadError: '',
       loading: true,
@@ -278,6 +282,8 @@ Page({
     this.setData({ genderIndex, gender: GENDER_OPTIONS[genderIndex] });
   },
 
+  onHealthConsent(e) { this.setData({ healthConsent: (e.detail.value || []).includes("consent") }); },
+
   async onSave() {
     if (this.data.busy || this._unloaded) return;
     if (!this.data.contextReady) {
@@ -295,6 +301,7 @@ Page({
     this.setData({ busy: true });
     let mutation = null;
     try {
+      validation.payload.member_health_consent = this.data.healthConsent;
       const options = mode === 'create'
         ? { method: 'POST', path: '/mp/api/v1/elders', data: validation.payload }
         : { method: 'PATCH', path: `/mp/api/v1/elders/${pairId}`, data: validation.payload };

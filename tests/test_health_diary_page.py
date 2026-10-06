@@ -22,6 +22,8 @@ def _seed_health_diary_data(db_session, *, with_weather, weather_location='éƒ½æ˜
     db_session.add(member)
     db_session.flush()
 
+    from services.account_service import grant_health_consent
+    grant_health_consent(member, user)
     entry_date = date(2026, 3, 28)
     db_session.add(HealthDiary(
         user_id=user.id,

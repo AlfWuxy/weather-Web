@@ -65,6 +65,8 @@ def _build_service_with_fixed_profile():
             "heat_island_index": 0.5,
             "medical_accessibility": 0.6,
             "baseline_visits": 5.0,
+            "baseline_period_days": 1,
+            "baseline_population_scope": "all_residents",
         }
     }
     return service
@@ -82,14 +84,15 @@ def test_excess_risk_normalization_avoids_hard_saturation():
 
     formula = elevated["hazard_formula"]
     assert formula["expression"] == (
-        "Excess=max(WeatherRR-1,0)×VI×BaselineVisits; "
-        "Hazard=clip((1-exp(-Excess/Efold))×100,0,100)"
+        "ExcessRate=max(WeatherRR-1,0)×BaselineVisits/BaselineDays/Population×1000; "
+        "Hazard=clip((1-exp(-ExcessRate/Efold))×100,0,100)"
     )
     assert set(formula) == {
         "expression",
         "weather_rr",
-        "vi",
-        "baseline_visits",
+        "baseline_visits", "baseline_period_days", "population", "population_scope",
+        "baseline_rate_per_1000_residents_day", "excess_rate_per_1000_residents_day",
+        "expected_excess_visits_per_day", "rate_unit", "count_unit",
         "excess",
         "efold",
         "hazard",
@@ -97,8 +100,7 @@ def test_excess_risk_normalization_avoids_hard_saturation():
 
     recomputed_excess = (
         max(formula["weather_rr"] - 1.0, 0.0)
-        * formula["vi"]
-        * formula["baseline_visits"]
+        * formula["baseline_visits"] / formula["baseline_period_days"] / formula["population"] * 1000
     )
     recomputed_hazard = min(
         100.0,

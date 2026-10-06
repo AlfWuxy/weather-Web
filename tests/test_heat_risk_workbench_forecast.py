@@ -233,7 +233,10 @@ def test_observed_heatwave_does_not_require_today_record(production_forecasts, a
 def test_missing_temperature_never_means_low_risk(high, low):
     day = classify_daily_hazard([{"temperature_max": high, "temperature_min": low}], 26.5)[0]
     assert day["level"] is None and day["label"] == "风险暂不可判定"
-    assert rank_villages([{"name": "村", "static_level": 4}], day) == []
+    rows = rank_villages([{"name": "村", "static_level": 4, "static_score": 80}], day)
+    assert rows[0]["daily_level"] is None
+    assert rows[0]["structural_level"] == 4
+    assert rows[0]["ranking_basis"] == "historical_structure_only"
 
 
 def test_four_villages_use_actual_grid_and_village_township(app):

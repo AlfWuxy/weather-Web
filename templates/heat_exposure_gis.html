@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
 
-{% block title %}都昌县热暴露 GIS｜宜老天气通{% endblock %}
+{% block title %}都昌县结构脆弱性 GIS｜宜老天气通{% endblock %}
 
 {% block body_class %}heat-exposure-gis-page{% endblock %}
 
@@ -18,7 +18,7 @@
     <header class="gis-hero" aria-labelledby="gisTitle">
         <div>
             <div class="gis-eyebrow">DUCHANG COUNTY · RESEARCH PROTOTYPE 01</div>
-            <h1 id="gisTitle">都昌县 1 km 网格级热暴露 GIS</h1>
+            <h1 id="gisTitle">都昌县 1 km 结构脆弱性 GIS</h1>
             <p class="gis-lede">把晴空地表温度、老年人口空间分布、地表覆盖和高程放到同一套可追溯 MODIS 网格中，支持逐格查看与来源追溯。</p>
         </div>
         <div class="gis-status-group" aria-label="数据状态">
@@ -40,7 +40,7 @@
         <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
         <div>
             <strong>解释边界</strong>
-            <span>本页展示模型化人口与 Aqua 白天晴空地表温度。结果不代表个人健康风险、2 米气温、室内温度或因果效应。</span>
+            <span>本页展示模型化人口与 Aqua 白天晴空地表温度。人口与地表覆盖采用 2020 年底数，地表温度采用 2020–2024 年历史夏季观测，不叠加实时天气；实时风险只在县级展示。结果不代表个人健康风险、2 米气温、室内温度或因果效应。</span>
             <span>新增相对分位、人口支持状态和中位数偏差均由本页现有网格即时计算，不增加逐年、逐月或个人层面的新数据。</span>
         </div>
     </aside>
