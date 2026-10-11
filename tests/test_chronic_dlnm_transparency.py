@@ -123,3 +123,42 @@ def test_chronic_service_uses_chronic_age_layer_only(monkeypatch):
     assert risk['comorbidity_amplifier'] == pytest.approx(1.4)
     assert risk['personal_rr'] == pytest.approx(1.32 * 1.1 * 1.4, abs=0.001)
     assert risk['age_modifier_policy'] == 'chronic_layer_only'
+
+
+def test_chronic_missing_age_is_not_presented_as_weather_update(authenticated_client, db_session, monkeypatch):
+    from core.db_models import User
+    from core.time_utils import utcnow
+    from services.account_service import grant_health_consent
+    user = User.query.filter_by(username='testuser').first()
+    grant_health_consent(user, user)
+    user.age = None
+    db_session.commit()
+    monkeypatch.setattr('blueprints.tools.get_weather_with_cache', lambda _: ({
+        'temperature': 31, 'temperature_max': 34, 'temperature_min': 26, 'humidity': 68,
+        'aqi': 62, 'pm25': 38, 'pressure': 1006, 'wind_speed': 2.5, 'weather_condition': '多云',
+        'observed_at': utcnow().isoformat(),
+        'air_observed_at': utcnow().isoformat(), 'air_quality_available': True,
+        'quality_version': 1, 'data_source': 'QWeather', 'is_mock': False,
+    }, False))
+    response = authenticated_client.post('/chronic-risk', data={'disease': 'hypertension', 'csrf_token': 'test-csrf-token'})
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert '风险未知' in html
+    assert '缺失或待核实：年龄' in html
+    assert 'href="/profile">补充健康档案' in html
+    assert '天气正在更新' not in html
+    assert '本次未生成照护关注分' in html
+
+
+def test_chronic_unavailable_weather_has_specific_status(authenticated_client, db_session, monkeypatch):
+    from core.db_models import User
+    from services.account_service import grant_health_consent
+    user = User.query.filter_by(username='testuser').first()
+    grant_health_consent(user, user)
+    db_session.commit()
+    monkeypatch.setattr('blueprints.tools.get_weather_with_cache', lambda _: (None, False))
+    response = authenticated_client.post('/chronic-risk', data={'disease': 'hypertension', 'csrf_token': 'test-csrf-token'})
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert '当前天气数据不可用，暂无法生成慢病照护提醒' in html
+    assert '天气正在更新' not in html

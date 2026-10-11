@@ -5,13 +5,14 @@
 {% block body_class %}family-members-page{% endblock %}
 
 {% block content %}
+{% set field_labels = {'relation': '与我的关系', 'age': '年龄', 'gender': '性别', 'chronic_diseases': '慢病情况', 'allergies': '过敏史', 'medications': '常用药', 'metrics': '健康指标', 'risk_tags': '照护标签', 'weather_thresholds': '天气提醒条件', 'contact_prefs': '联系方式与通知偏好'} %}
 <div class="container" style="max-width: 1200px;">
 
     <div class="section-heading d-flex justify-content-between align-items-start flex-wrap gap-3 yl-fade-up">
         <div>
             <span class="section-kicker"><i class="bi bi-people"></i> 家人档案</span>
             <h2>你正在关注的家人</h2>
-            <p>管理老人档案、慢病信息与天气阈值，风险变化时第一时间收到提醒。</p>
+            <p>补全家人档案，查看天气提醒，安排照护行动。</p>
         </div>
         <a href="{{ url_for('health.family_member_new') }}" class="btn btn-primary">
             <i class="bi bi-plus-lg me-1"></i>添加家人
@@ -41,9 +42,9 @@
         </div>
         <div class="col-6 col-md-3">
             <div class="yl-stat-card accent">
-                <div class="k">高风险 {{ metric_info('member_risk_score') }}</div>
+                <div class="k">高关注 {{ metric_info('member_risk_score') }}</div>
                 <div class="v" style="color:var(--yl-danger);">{{ high_risk_count or 0 }}</div>
-                <div class="sub">今日需重点关注</div>
+                <div class="sub">按档案需重点关注</div>
             </div>
         </div>
         <div class="col-6 col-md-3">
@@ -70,10 +71,10 @@
                 <input type="text" class="form-control" name="q" value="{{ search_query or '' }}" placeholder="家人名字…">
             </div>
             <div class="col-md-3">
-                <label class="form-label">风险等级</label>
+                <label class="form-label">照护关注程度</label>
                 <select name="risk_level" class="form-select">
                     <option value="">全部</option>
-                    <option value="unknown" {% if risk_filter == 'unknown' %}selected{% endif %}>风险未知 · 待回访</option>
+                    <option value="unknown" {% if risk_filter == 'unknown' %}selected{% endif %}>风险未知 · 待补资料</option>
                     <option value="high" {% if risk_filter == 'high' %}selected{% endif %}>高关注</option>
                     <option value="medium" {% if risk_filter == 'medium' %}selected{% endif %}>中关注</option>
                     <option value="low" {% if risk_filter == 'low' %}selected{% endif %}>常规关注</option>
@@ -87,7 +88,7 @@
 
     {% if not weather_available %}
     <div class="alert alert-warning yl-fade-up yl-fade-up-d1" role="status">
-        <i class="bi bi-cloud-slash me-1"></i>天气正在更新，家庭成员的阈值提醒稍后恢复。你仍可查看档案并做好日常防护。
+        <i class="bi bi-cloud-slash me-1"></i>当前天气数据不可用，暂无法核对家人的天气提醒条件。可先查看和补全档案。
     </div>
     {% endif %}
 
@@ -95,20 +96,20 @@
     {% if family_members %}
         <div class="row g-3 yl-fade-up yl-fade-up-d2">
             {% for m in family_members %}
-            {% set attention_label = {'high': '高关注', 'medium': '中关注', 'low': '常规关注', 'unknown': '风险未知 · 待回访'}.get(m.risk_level, '待完善') %}
+            {% set attention_label = {'high': '高关注', 'medium': '中关注', 'low': '常规关注', 'unknown': '风险未知 · 待补资料'}.get(m.risk_level, '待完善') %}
             <div class="col-md-6 col-xl-4">
-                <div class="card member-card risk-{{ m.risk_level or 'low' }} h-100">
+                <div class="card member-card risk-{{ m.risk_level or 'unknown' }} h-100">
                     <div class="card-body">
                         <div class="d-flex align-items-center gap-3 mb-3">
                             <div class="member-avatar">{{ m.name[:1] }}</div>
                             <div class="flex-grow-1 min-w-0">
                                 <h5 class="mb-0 text-truncate">{{ m.name }}</h5>
                                 <div class="text-muted" style="font-size:.85rem;">
-                                    {{ m.age }}岁 · {{ m.gender or '—' }} · 与我的关系:{{ m.relation or '—' }}
+                                    {{ (m.age|string) ~ '岁' if m.age is not none else '年龄未填' }} · {{ m.gender or '—' }} · 与我的关系:{{ m.relation or '—' }}
                                 </div>
                             </div>
-                            <span class="risk-badge risk-{{ m.risk_level or 'low' }} badge">{{ attention_label }}</span>
-                            {% if m.risk.requires_followup %}<span class="badge bg-warning text-dark">回访补充资料 · 至少中关注</span>{% endif %}
+                            <span class="risk-badge risk-{{ m.risk_level or 'unknown' }} badge">{{ attention_label }}</span>
+                            {% if m.risk.requires_followup %}<span class="badge bg-warning text-dark">资料待补充，已优先显示</span>{% endif %}
                             {{ metric_info('member_risk_score', {'成员': m.name, '本次得分': m.risk.score if m.risk else '--', '原因': m.risk.reasons|join('、') if m.risk and m.risk.reasons else '资料不足或暂无已知因素'}) }}
                         </div>
 
@@ -119,10 +120,13 @@
                                     <span class="badge bg-info-subtle">{{ c }}</span>
                                 {% endfor %}
                             {% else %}
-                                <span class="badge bg-light">未登记慢病</span>
+                                <span class="badge bg-light">{% if not m.completion.health_consent %}健康信息未授权{% elif 'chronic_diseases' in m.completion.missing_fields %}慢病情况待回答{% else %}已填写：无慢病{% endif %}</span>
                             {% endif %}
                         </div>
 
+                        {% if m.completion.missing_fields %}
+                        <div class="small text-muted mb-3">{% if not m.completion.health_consent %}健康资料尚未授权使用，请在编辑档案时确认。{% else %}待补充：{% for field in m.completion.missing_fields %}{{ field_labels.get(field, field) }}{% if not loop.last %}、{% endif %}{% endfor %}。{% endif %}</div>
+                        {% endif %}
                         {% if m.today_tip %}
                         <div class="p-2 mb-3" style="background:var(--yl-orange-50); border-radius:10px; font-size:.85rem;">
                             <i class="bi bi-lightbulb text-warning me-1"></i>{{ m.today_tip }}
@@ -138,7 +142,7 @@
                                 <i class="bi bi-eye me-1"></i>查看
                             </a>
                             <a href="{{ url_for('health.family_member_edit', member_id=m.id) }}" class="btn btn-sm btn-outline-secondary" aria-label="编辑 {{ m.name }} 的档案">
-                                <i class="bi bi-pencil"></i>
+                                <i class="bi bi-pencil"></i> {{ '补充资料' if m.completion.missing_fields else '编辑' }}
                             </a>
                         </div>
                     </div>
@@ -150,7 +154,7 @@
         <div class="yl-section text-center yl-fade-up yl-fade-up-d2" style="padding:60px 30px;">
             <div style="font-size:3rem; color:var(--yl-orange-400);"><i class="bi bi-people"></i></div>
             <h4 class="mt-3">还没有添加家人</h4>
-            <p class="text-muted">添加要关注的老人,我们会在风险变化时提醒你。</p>
+            <p class="text-muted">添加家人，填写照护资料和天气提醒条件。</p>
             <a href="{{ url_for('health.family_member_new') }}" class="btn btn-primary mt-2">
                 <i class="bi bi-plus-lg me-1"></i>添加第一位家人
             </a>

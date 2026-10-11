@@ -142,10 +142,13 @@ def test_committed_real_report_is_aggregate_and_both_results_visible(client):
         assert forbidden not in serialized
     response = client.get("/transparency")
     assert response.status_code == 200
-    assert "这是记录计数回顾性比较，尚未验证高温健康模型" in response.text
+    assert "历史记录计数回测" in response.text
+    assert "输入为星期和过去记录数" in response.text
+    assert "数据覆盖一个夏季" in response.text
     assert "敏感性结果" in response.text
     assert "事前归档与前瞻验证" in response.text
-    assert "生产模型尚无可核验的事前归档验证" in response.text
+    assert "验证资料待补充" in response.text
+    assert "真实前瞻验证样本：0" in response.text
     assert str(result["metrics"]["mae"]) in response.text
     assert str(result["sensitivity_exclude_no_record_targets"]["metrics"]["mae"]) in response.text
 

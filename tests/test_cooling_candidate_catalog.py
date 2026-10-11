@@ -98,7 +98,7 @@ def test_public_candidates_never_create_resources_or_map_points(candidate_catalo
     assert _map_points(html) == []
     assert 'href="https://example.gov.cn/report"' in html
     assert "历史报道提到电风扇，未提及空调" in html
-    assert "当前开放：</strong>未知" in html
+    assert "<strong>开放时间待确认</strong>" in html
     assert "official-cooling-" not in html
 
 

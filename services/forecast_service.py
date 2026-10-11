@@ -341,7 +341,7 @@ class ForecastService:
             {
                 'priority': 'medium',
                 'title': '居民日常行动',
-                'action': '结合官方天气预警和逐日天气安排外出；复合暴露关注分只作防护沟通参考。'
+                'action': '根据逐日天气安排外出，天气关注分较高时提前准备防护，并查看当地官方预警。'
             }
         ]
         if composite_high_days:
@@ -355,7 +355,7 @@ class ForecastService:
             {
                 'priority': 'medium',
                 'title': '村医排班准备',
-                'action': '门诊负担模型尚未完成时间切分校准，不据此自动排班；请结合官方预警与现场需求人工准备。'
+                'action': '结合官方天气预警、近期接诊情况和现场需求安排值班。'
             }
         ]
 
@@ -398,27 +398,27 @@ class ForecastService:
             branch, raw, score = 'external', external, external
             source = str(external_source or 'upstream_unspecified')
             method = str(external_method or 'upstream_method_unspecified')
-            note = '采用上游参考分；校准方法未验证，非实测准确率'
+            note = '采用上游参考分；具体算法和校准情况待核实'
             if spread is None:
-                note += '；无多模型信息，无法用离散度交叉核对'
+                note += '；多模型温差信息缺失'
         elif spread is None:
             branch, raw = 'lead_only', 60.0 - penalty
             score = max(5.0, min(60.0, raw))
             source, method = 'local_forecast_service', 'lead_only'
-            note = '无多模型信息；仅按提前期的启发式评分，非实测准确率'
+            note = '按提前天数计算，最高 60 分；多模型温差信息缺失'
         else:
             branch, raw = 'derived', 100.0 - spread * 16 - penalty
             score = max(5.0, min(99.0, raw))
             source, method = 'local_forecast_service', 'ensemble_spread_heuristic'
-            note = '多模型离散度启发式评分，非实测准确率'
+            note = '按多模型温差与提前天数计算的规则评分'
         if external_status == 'invalid':
-            note += '；上游分数无效，已回退本地评分'
+            note += '；上游分数格式异常，本次采用本地规则'
         return {
             'score': round(score, 1), 'label': '高' if score >= 75 else '中' if score >= 50 else '低',
             'branch': branch, 'raw_score': round(raw, 1), 'validated': False,
             'source': source, 'method': method, 'calibration_status': 'unvalidated',
             'multimodel_information_available': spread is not None,
-            'limitations': ['未验证与实际预报误差的关系', '不代表健康模型准确率'],
+            'limitations': ['分数与实际预报误差的对应关系待验证', '评分对象为天气预报'],
             'note': note,
             'inputs': {'external_score': external, 'external_score_status': external_status,
                        'external_score_rejection': 'expected_finite_score_0_100' if external_status == 'invalid' else None,
@@ -928,7 +928,7 @@ class ForecastService:
                     recommendations.append({
                         'priority': 'high' if event['severity'] == 'extreme' else 'medium',
                         'category': '天气事件',
-                        'advice': f"{day['date']}: {event['description']}（模型阈值行动提示，非官方预警）"
+                        'advice': f"{day['date']}: {event['description']}（按温度规则提示）"
                     })
         
         # 温度趋势分析
@@ -944,7 +944,7 @@ class ForecastService:
             recommendations.append({
                 'priority': 'low',
                 'category': '常规管理',
-                'advice': '本页模型预警未启用，请继续关注官方天气预警与逐日天气变化'
+                'advice': '按逐日天气安排外出，出门前查看当地官方天气预警。'
             })
         
         return recommendations

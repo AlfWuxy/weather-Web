@@ -204,7 +204,7 @@ def test_7day_model_warnings_are_disabled_but_weather_events_remain(monkeypatch)
     assert summary['impact_likelihood_matrix']['available'] is False
     assert summary['composite_exposure']['high_attention_days'] >= 0
     assert 'high_risk_days' not in summary['composite_exposure']
-    assert any('非官方预警' in item['advice'] for item in summary['recommendations'])
+    assert any('按温度规则提示' in item['advice'] for item in summary['recommendations'])
 
 
 def test_predictability_reports_external_and_derived_branches():
@@ -477,6 +477,8 @@ def test_forecast_page_embeds_recalculation_context(authenticated_client, monkey
     assert exposure_context['PM2.5来源'] == '当前实况复用（非未来预报）'
     assert contexts_by_metric['forecast_exposure_score'][1]['PM2.5来源'] == '空气质量未知'
     assert 'forecast_visit_probability' not in contexts_by_metric
-    assert '门诊高负荷概率与模型预警尚未完成校准，当前不启用' in body
+    assert '门诊高负荷概率与模型预警' not in body
+    assert '规则评分' in body
+    assert '采用上游提供的参考分' in body
     assert predictability_context['计算分支'] == '上游外部分数'
     assert predictability_context['外部分数输入'] == 88.0

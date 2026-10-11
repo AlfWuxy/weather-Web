@@ -30,7 +30,7 @@ def test_anonymous_today_pages_share_rainfall_card(client, db_session, monkeypat
     assert 'data-rain-rows' in body
     assert 'rain-card.js' in body
     assert 'mm/h' in body
-    assert '不能用作中国 24 小时雨量等级或官方预警等级' in body
+    assert '中国 24 小时雨量等级和官方预警使用各自的标准' in body
     assert 'weather/nowcast' in body and 'hours=6' in body
 
 

@@ -10,7 +10,7 @@
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-snow2"></i> 避暑资源</span>
         <h1>都昌县避暑资源与纳凉点</h1>
-        <p>高温天，可以带老人查看这些避暑资源。开放时间、无障碍条件和现场安排请在出发前再次确认。</p>
+        <p>查找纳凉地点，查看开放时间、联系方式和核验记录。出发前联系场所确认接待条件。</p>
     </section>
 
     {% if outdoor_temp is not none %}
@@ -32,8 +32,8 @@
             </div>
             <div class="col-md">
                 <span class="yl-temp-status">当前温度观测</span>
-                <h4 class="mt-2 mb-1" style="font-size:1.15rem;">温度仅供查看，不单独判断外出是否安全</h4>
-                <p class="text-muted mb-0" style="font-size:.9rem;">安排外出前还需查看湿度、空气质量、天气预警和个人身体状态。下方资源信息以现场或资源方最新说明为准。</p>
+                <h4 class="mt-2 mb-1" style="font-size:1.15rem;">出发前看天气、地点开放时间与接待条件</h4>
+                <p class="text-muted mb-0" style="font-size:.9rem;">结合湿度、空气质量、天气预警和老人身体状况安排出行。</p>
             </div>
         </div>
     </section>
@@ -141,7 +141,7 @@
                     <div class="text-muted" style="font-size:.85rem;">{{ r.resource_type or '避暑资源' }} · {{ community }}</div>
 
                     <div class="mt-3" style="font-size:.88rem; color:var(--yl-ink-soft);">
-                        <div class="mb-1"><i class="bi bi-clock me-1 text-muted"></i>{{ r.open_hours or '开放时间未标注' }}</div>
+                        <div class="mb-1"><i class="bi bi-clock me-1 text-muted"></i>{{ r.open_hours or '开放时间待确认' }}</div>
                         <div><i class="bi bi-geo-alt me-1 text-muted"></i>{{ r.address_hint or '地址未标注' }}</div>
                         {% if r.is_accessible %}
                         <div class="mt-1"><i class="bi bi-universal-access me-1 text-muted"></i>适合行动不便老人</div>
@@ -188,10 +188,11 @@
     {% if pending_cards %}
     <section class="yl-section mt-4" data-resource-status="pending" aria-labelledby="pendingCoolingTitle">
         <h2 class="h4" id="pendingCoolingTitle">待核实线索</h2>
-        <p>以下资源未完成有效核验或已有关闭反馈，不在地图推荐为可用去处。请先联系确认。</p>
+        <p>这些地点的服务核验已过期、尚未完成，或收到关闭反馈。联系确认后再安排前往。</p>
         <div class="row g-3">{% for card in pending_cards %}<div class="col-md-6"><article class="card h-100"><div class="card-body">
             <h3 class="h5">{{ card.name }}</h3><p>{{ card.status_label }}</p>
             <p class="mb-1">{{ card.address_hint or '地址待确认' }} · {{ card.open_hours or '开放时间待确认' }}</p>
+            {% if card.contact_hint %}<p class="mb-1"><i class="bi bi-telephone me-1"></i>{{ card.contact_hint }}</p>{% endif %}
             {% if card.last_verified_label %}<p class="small text-muted">{{ card.last_verified_label }}</p>{% endif %}
         </div></article></div>{% endfor %}</div>
     </section>
@@ -211,7 +212,7 @@
             <a class="btn btn-outline-primary align-self-start" href="{{ url_for('user.heat_exposure_gis') }}">{{ '在县域地图查看这些地点' if current_user.is_authenticated else '登录后在县域地图查看' }}</a>
         </div>
         <div class="alert alert-warning" role="note">
-            “地点已核验”表示名称与坐标已核对；是否已确认可前往、开放时间和纳凉设施请查看各条记录。旧的待核验场所仍需联系确认。
+            “地点已核验”指名称和坐标已核对。各地点的开放时间、接待条件和设施见下方记录，出发前请联系确认。
         </div>
         <div class="row g-3">
             {% for candidate in cooling_candidates %}
@@ -228,7 +229,7 @@
                             <strong>资料地址：</strong>{{ candidate.address or '未提供' }}
                         </p>
                         {% if location_verified %}
-                        <p class="small mb-2"><strong>开放时间：</strong>{{ candidate.opening_hours_hint or '未提供' }}</p>
+                        {% if candidate.opening_hours_hint %}<p class="small mb-2"><strong>资料所列时段：</strong>{{ candidate.opening_hours_hint }}</p>{% endif %}
                         <p class="small mb-2"><strong>空调：</strong>未知 · <strong>无障碍：</strong>未知</p>
                         <p class="small text-muted mb-2"><strong>核验依据：</strong>{{ (candidate.location_verification_note or '高德名称与坐标核对；项目负责人确认可前往，未现场核验。')|replace('未现场核验，开放时间及空调等设施信息未提供。', '未现场核验。') }}{% if candidate.location_verified_at %} · {{ candidate.location_verified_at }}{% endif %}</p>
                         {% else %}
@@ -236,7 +237,7 @@
                         {% endif %}
                         {% if not location_verified or (candidate.audience_hint and candidate.audience_hint != '项目负责人确认地点真实、可前往；具体接待人群及无障碍条件未提供') %}<p class="small mb-2"><strong>接待对象：</strong>{{ candidate.audience_hint or '待确认' }}</p>{% endif %}
                         {% if not location_verified or (candidate.facilities_hint and candidate.facilities_hint != '空调、饮水及无障碍设施信息未提供；不根据名称推定设备或纳凉能力') %}<p class="small mb-2"><strong>设施资料：</strong>{{ candidate.facilities_hint or '待核验' }}</p>{% endif %}
-                        <p class="small mb-2"><strong>当前开放：</strong>未知，前往前须联系确认</p>
+                        <p class="small mb-2"><strong>开放时间待确认</strong></p>
                         {% if candidate.verification_note and (not location_verified or candidate.verification_note != candidate.location_verification_note) %}<p class="small text-muted mb-2">{{ candidate.verification_note }}</p>{% endif %}
                         <p class="small mb-0">
                             <strong>资料来源：</strong>

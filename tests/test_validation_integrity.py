@@ -72,8 +72,8 @@ def test_report_rejects_legacy_training_fit(tmp_path):
 def test_public_scorecard_without_report_is_honest(client):
     result = client.get("/transparency")
     assert result.status_code == 200
-    assert "公开验证成绩单" in result.get_data(as_text=True)
-    assert "生产模型尚无可核验的事前归档验证" in result.get_data(as_text=True)
+    assert "模型验证记录" in result.get_data(as_text=True)
+    assert "验证资料待补充" in result.get_data(as_text=True)
 
 
 def prior_inputs():

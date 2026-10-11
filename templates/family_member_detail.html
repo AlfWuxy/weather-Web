@@ -4,12 +4,13 @@
 {% block title %}成员详情 · 宜老天气通{% endblock %}
 
 {% block content %}
+{% set field_labels = {'relation': '与我的关系', 'age': '年龄', 'gender': '性别', 'chronic_diseases': '慢病情况', 'allergies': '过敏史', 'medications': '常用药', 'metrics': '健康指标', 'risk_tags': '照护标签', 'weather_thresholds': '天气提醒条件', 'contact_prefs': '联系方式与通知偏好'} %}
 <div class="container">
     <div class="row mb-4">
         <div class="col-12 d-flex align-items-center justify-content-between">
             <div>
                 <h2><i class="bi bi-person-badge"></i> {{ member.name }} · {{ member.relation or '关系未填' }}</h2>
-                <p class="text-muted">成员健康画像与预警订阅概览</p>
+                <p class="text-muted">查看家人的照护关注项、档案和天气提醒条件。</p>
             </div>
             <div class="d-flex gap-2">
                 <a class="btn btn-outline-secondary" href="{{ url_for('health.family_members') }}">返回列表</a>
@@ -27,31 +28,32 @@
                             <h5 class="mb-1">基础信息</h5>
                             <div class="text-muted">{{ member.gender or '-' }} · {{ member.age or '-' }}岁</div>
                         </div>
-                        <span class="badge risk-badge risk-{{ risk.level }}">{{ {'high': '高关注', 'medium': '中关注', 'low': '常规关注', 'unknown': '风险未知 · 待回访'}.get(risk.level, '待完善') }}</span>
-                        {% if risk.requires_followup %}<p>资料不足，风险未知，已进入至少中关注的回访顺序。</p>{% endif %}
+                        <span class="badge risk-badge risk-{{ risk.level }}">{{ {'high': '高关注', 'medium': '中关注', 'low': '常规关注', 'unknown': '风险未知 · 待补资料'}.get(risk.level, '待完善') }}</span>
+                        {% if risk.requires_followup %}<p>风险未知。资料待补充，建议优先回访。</p>{% endif %}
                         {{ metric_info('member_risk_score', {'本次得分': risk.score, '原因': risk.reasons|join('、') if risk.reasons else '资料不足或暂无已知因素'}) }}
                     </div>
                     <div class="mt-3">
-                        <div class="text-muted small mb-1">风险原因</div>
+                        <div class="text-muted small mb-1">照护关注项</div>
+                        <p class="small text-muted">根据年龄、慢病和所填照护资料整理，用于安排关注顺序。</p>
                         <div class="d-flex flex-wrap gap-2">
                             {% if risk.reasons %}
                                 {% for reason in risk.reasons %}
                                     <span class="badge bg-warning-subtle text-dark border">{{ reason }}</span>
                                 {% endfor %}
                             {% else %}
-                                <span class="text-muted small">暂无明显风险标签</span>
+                                <span class="text-muted small">未列出关注项，请结合档案完整度查看。</span>
                             {% endif %}
                         </div>
                     </div>
                     <div class="mt-3">
                         <div class="text-muted small mb-1">慢性病</div>
                         <div class="d-flex flex-wrap gap-2">
-                            {% if member.chronic_diseases %}
-                                {% for disease in member.chronic_diseases|from_json %}
+                            {% if chronic_diseases %}
+                                {% for disease in chronic_diseases %}
                                     <span class="badge bg-light text-dark border">{{ disease }}</span>
                                 {% endfor %}
                             {% else %}
-                                <span class="text-muted small">未记录</span>
+                                <span class="text-muted small">{% if not completion.health_consent %}健康信息未授权{% elif 'chronic_diseases' in completion.missing_fields %}慢病情况待回答{% else %}已填写：无慢病{% endif %}</span>
                             {% endif %}
                         </div>
                     </div>
@@ -78,19 +80,27 @@
                         <div class="progress-bar" role="progressbar" style="width: {{ completion.percent }}%"></div>
                     </div>
                     <div class="text-muted small">{{ completion.percent }}% · 已完善 {{ completion.filled }}/{{ completion.total }}</div>
+                    {% if completion.missing_fields %}
+                    <div class="small mt-2">{% if not completion.health_consent %}健康资料尚未授权使用，请在编辑档案时确认。{% else %}待补充：{% for field in completion.missing_fields %}{{ field_labels.get(field, field) }}{% if not loop.last %}、{% endif %}{% endfor %}。{% endif %}</div>
+                    <a href="{{ url_for('health.family_member_edit', member_id=member.id) }}">补充资料</a>
+                    {% endif %}
                     <div class="mt-3">
                         <h6 class="mb-2">今日预警状态</h6>
-                        {% if not weather_available %}
-                            <span class="badge bg-warning-subtle text-warning-emphasis border">天气更新中</span>
+                        {% if not completion.health_consent %}
+                            <span class="badge bg-secondary">健康信息未授权，未核对个人提醒条件</span>
+                        {% elif not profile.alert_enabled %}
+                            <span class="badge bg-secondary">提醒已暂停</span>
+                        {% elif not weather_available %}
+                            <span class="badge bg-warning-subtle text-warning-emphasis border">天气数据不可用</span>
                         {% elif alerts %}
                             <span class="badge bg-danger">触发：{{ alerts|join('、') }}</span>
                         {% else %}
                             <span class="badge bg-success-subtle text-success border">未触发</span>
                         {% endif %}
                         {% if weather_available and weather %}
-                            <div class="text-muted small mt-2">天气：{{ weather.temperature|round(1) }}°C / 湿度 {{ weather.humidity|round(0) }}% / AQI {{ weather.aqi or '--' }}</div>
+                            <div class="text-muted small mt-2">天气：{{ weather.temperature|round(1) }}°C / 湿度 {{ weather.humidity|round(0) }}% / AQI {{ weather.aqi if weather.aqi is not none else '不可用' }}</div>
                         {% else %}
-                            <div class="text-muted small mt-2">风险提醒将在天气更新后显示。现在可先查看档案和日常防护建议。</div>
+                            <div class="text-muted small mt-2">当前天气数据不可用，暂无法核对天气提醒条件。可先查看和补全档案。</div>
                         {% endif %}
                     </div>
                 </div>
@@ -135,7 +145,7 @@
         <div class="col-lg-6">
             <div class="card shadow-sm h-100">
                 <div class="card-body">
-                    <h6 class="mb-3">隐私与共享</h6>
+                    <h6 class="mb-3">共享设置</h6>
                     {% set privacy_map = {'family': '家庭可见', 'private': '仅本人可见', 'doctor': '授权医生可见', 'community': '社区管理员可见'} %}
                     <p class="mb-2"><strong>隐私级别：</strong>{{ privacy_map.get(profile.privacy_level, profile.privacy_level) }}</p>
                     <p class="mb-2"><strong>授权医生查看：</strong>{{ '是' if profile.share_with_doctor else '否' }}</p>

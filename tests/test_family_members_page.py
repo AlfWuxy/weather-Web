@@ -3,6 +3,8 @@
 
 import json
 
+import pytest
+
 from core.time_utils import utcnow
 
 
@@ -109,8 +111,8 @@ def test_family_members_page_does_not_trigger_alerts_from_mock_weather(client, d
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '天气正在更新' in body
-    assert '家庭成员的阈值提醒稍后恢复' in body
+    assert '当前天气数据不可用' in body
+    assert '暂无法核对家人的天气提醒条件' in body
     assert '模拟值不会触发通知' not in body
     assert '今日触发' in body
     assert '触发：高温' not in body
@@ -182,3 +184,74 @@ def test_family_member_edit_prefills_existing_chronic_diseases(client, db_sessio
     snippet_start = body.index(marker)
     snippet = body[max(0, snippet_start - 80): snippet_start + 120]
     assert 'checked' in snippet
+
+
+def test_missing_family_profile_has_specific_fields_and_no_created_followup(client, db_session, monkeypatch):
+    from core.db_models import FamilyMember
+    from services.account_service import grant_health_consent
+    user = _create_user(db_session, username='family_missing_copy')
+    member = FamilyMember(user_id=user.id, name='长辈', relation='父亲', age=None, gender='男性')
+    grant_health_consent(member, user)
+    db_session.add(member)
+    db_session.commit()
+    _login_as(client, user.id)
+    monkeypatch.setattr('blueprints.health.get_weather_with_cache', lambda _: (None, False))
+    for path in ('/family-members', f'/family-members/{member.id}'):
+        response = client.get(path)
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert '风险未知' in body
+        assert '待补充：年龄、慢病情况' in body
+        assert f'/family-members/{member.id}/edit' in body
+        assert '补充资料' in body
+        assert '已进入' not in body
+        assert '已列入回访' not in body
+        assert '天气更新中' not in body
+
+
+def test_member_detail_does_not_show_unconsented_legacy_chronic_data(client, db_session, monkeypatch):
+    from core.db_models import FamilyMember
+    user = _create_user(db_session, username='family_unconsented_copy')
+    member = FamilyMember(user_id=user.id, name='长辈', chronic_diseases=json.dumps(['旧档案隐私测试疾病']))
+    db_session.add(member)
+    db_session.commit()
+    _login_as(client, user.id)
+    monkeypatch.setattr('blueprints.health.get_weather_with_cache', lambda _: (None, False))
+    response = client.get(f'/family-members/{member.id}')
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '旧档案隐私测试疾病' not in body
+    assert '健康信息未授权' in body
+    assert '健康资料尚未授权使用' in body
+
+
+@pytest.mark.parametrize('consented,enabled,expected', [
+    (False, True, '健康信息未授权，未核对个人提醒条件'),
+    (True, False, '提醒已暂停'),
+    (True, True, '未触发'),
+])
+def test_member_detail_distinguishes_unchecked_alerts_from_no_trigger(client, db_session, monkeypatch, consented, enabled, expected):
+    from core.db_models import FamilyMember, FamilyMemberProfile
+    from services.account_service import grant_health_consent
+    user = _create_user(db_session, username='family_alert_status')
+    member = FamilyMember(user_id=user.id, name='长辈', age=72, chronic_diseases='[]')
+    if consented:
+        grant_health_consent(member, user)
+    db_session.add(member)
+    db_session.flush()
+    db_session.add(FamilyMemberProfile(member_id=member.id, alert_enabled=enabled,
+        weather_thresholds=json.dumps({'high_temp': 35})))
+    db_session.commit()
+    _login_as(client, user.id)
+    monkeypatch.setattr('blueprints.health.get_weather_with_cache', lambda _: ({
+        'temperature': 25, 'humidity': 60, 'aqi': 0, 'data_source': 'QWeather',
+        'is_mock': False, 'observed_at': utcnow().isoformat(),
+    }, False))
+    response = client.get(f'/family-members/{member.id}')
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert expected in body
+    assert 'AQI 0' in body
+    if not consented or not enabled:
+        assert '>未触发<' not in body
+        assert '>触发：' not in body

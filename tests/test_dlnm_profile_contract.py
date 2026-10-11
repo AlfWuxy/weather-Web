@@ -56,7 +56,7 @@ def test_research_rr_priors_are_metadata_only_and_model_is_exploratory():
     summary = service.get_model_summary()
 
     assert summary['evidence_status'] == 'exploratory'
-    assert summary['mmt_boundary_flag'] == 1
+    assert summary['mmt_boundary_flag'] is None
     assert summary['probability_calibrated'] is False
     assert summary['threshold_semantics'] == 'action_communication_interface'
     assert summary['research_priors']['cold_p5_rr'] == {
@@ -80,3 +80,65 @@ def test_hot_night_signal_does_not_apply_an_unvalidated_rr_multiplier():
     assert 'rr_multiplier' not in hot_night
     assert hot_night['model_effect_applied'] is False
     assert hot_night['effect_status'] == 'action_signal_only'
+
+
+@pytest.mark.parametrize('raw, expected', [
+    (None, None), (0, 0), (1, 1), (0.0, 0), (1.0, 1),
+    (True, None), (False, None), ('1', None), (2, None),
+    (-1, None), (0.5, None), (float('nan'), None), (float('inf'), None),
+])
+def test_summary_preserves_mmt_diagnostic_and_keeps_invalid_values_unknown(raw, expected):
+    service = _profile_service()
+    service.model_profile_metrics = {'mmt_boundary_flag': raw}
+    summary = service.get_model_summary()
+    assert summary['mmt_boundary_flag'] == expected
+    assert summary['evidence_status'] == 'exploratory'
+    assert summary['probability_calibrated'] is False
+
+
+@pytest.mark.parametrize('flag, label', [
+    (None, '诊断资料待补充'),
+    (0, '参考温度位于搜索范围内'),
+    (1, '参考温度位于搜索边界'),
+])
+def test_transparency_reads_configured_diagnostic_without_loading_health_data(client, tmp_path, monkeypatch, flag, label):
+    import json
+    from services.dlnm_risk_service import DLNMRiskService, get_configured_profile_metadata
+
+    profile = tmp_path / 'private-profile.json'
+    profile.write_text(json.dumps({
+        'version': 'test-version', 'mmt': 24.2,
+        'curve': [{'temp': 24.2, 'rr': 1}],
+        'metrics': {} if flag is None else {'mmt_boundary_flag': flag},
+        'source': '/private/health/records', 'sample_counts': {'private_cohort': 9},
+    }))
+    monkeypatch.setenv('DLNM_PROFILE_PATH', str(profile))
+    monkeypatch.setenv('DLNM_USE_PROFILE', 'true')
+    monkeypatch.setattr(DLNMRiskService, '__init__', lambda *args, **kwargs: pytest.fail('方法页应只读取公开配置元数据'))
+    metadata = get_configured_profile_metadata()
+    assert metadata == {'status': 'available', 'version': 'test-version', 'mmt': 24.2, 'mmt_boundary_flag': flag}
+    response = client.get('/transparency')
+    assert response.status_code == 200
+    assert label in response.text
+    assert 'test-version' in response.text
+    assert '24.2°C' in response.text
+    assert '/private/health/records' not in response.text
+    assert 'private_cohort' not in response.text
+    assert 'MMT 边界标记为 1' not in response.text
+
+
+def test_public_profile_metadata_handles_disabled_and_missing_configuration(monkeypatch, tmp_path):
+    from services.dlnm_risk_service import get_configured_profile_metadata
+    monkeypatch.setenv('DLNM_PROFILE_PATH', str(tmp_path / 'missing.json'))
+    monkeypatch.setenv('DLNM_USE_PROFILE', 'false')
+    assert get_configured_profile_metadata() == {'status': 'disabled'}
+    monkeypatch.setenv('DLNM_USE_PROFILE', 'true')
+    assert get_configured_profile_metadata() == {'status': 'unavailable'}
+
+
+def test_public_profile_metadata_matches_explicit_empty_loader_path(monkeypatch):
+    from services.dlnm_risk_service import get_configured_profile_metadata
+    monkeypatch.setenv('DLNM_USE_PROFILE', 'true')
+    monkeypatch.setenv('DLNM_PROFILE_PATH', '')
+    # 加载器遇到显式空路径会读取目录失败，方法页应显示同一资料状态。
+    assert get_configured_profile_metadata() == {'status': 'unavailable'}

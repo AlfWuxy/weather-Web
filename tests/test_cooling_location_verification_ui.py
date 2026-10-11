@@ -81,11 +81,11 @@ def _visible_text(markup):
     return re.sub(r"\s+", "", unescape(re.sub(r"<[^>]+>", "", markup)))
 
 
-def _assert_location_details(markup, grouped_facilities=False):
+def _assert_location_details(markup, grouped_facilities=False, opening_label="开放时间未提供"):
     text = _visible_text(markup)
     compact = text.replace("：", "").replace(":", "")
     facilities = ("空调、无障碍未知",) if grouped_facilities else ("空调未知", "无障碍未知")
-    for expected in ("地点已核验", "开放时间未提供", *facilities,
+    for expected in ("地点已核验", opening_label, *facilities,
                      "高德名称与坐标已核对", "项目负责人确认地点真实、可前往", "未现场核验", "2026-09-27"):
         assert expected in compact
     assert "待人工核验" not in text
@@ -113,7 +113,7 @@ def test_public_page_separates_fifty_verified_locations_and_one_pending(location
     assert len(pending) == 1
     for row, card in zip(location_candidates[:50], verified):
         assert row["name"] in _visible_text(card)
-        _assert_location_details(card)
+        _assert_location_details(card, opening_label="开放时间待确认")
     assert "旧待核验场所" in _visible_text(pending[0])
     assert "待人工核验" in _visible_text(pending[0])
     assert "地点已核验" not in _visible_text(pending[0])

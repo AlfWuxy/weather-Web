@@ -19,7 +19,8 @@ def test_public_snapshot_is_preserved_and_hazards_are_separate(client, db_sessio
     assert body.index('data-hazard-card="official"') < body.index('data-hazard-card="heat"')
     for hazard in ['official','heat','rain','cold']:
         assert body.count('data-hazard-card="'+hazard+'"') == 1
-    assert '这不表示当前没有预警' in body
+    assert '官方预警数据暂未获取' in body
+    assert '查看中国气象局官方信息' in body
     assert '时段雨量预报：未知' in body
     assert '寒冷 · 研究中' in body
     assert '当前风险：低' not in body
@@ -66,7 +67,8 @@ def test_map_requires_both_service_and_coordinate_verification(app, monkeypatch,
 def test_home_claims_only_heat_and_keeps_guest_care_path(client, db_session):
     body=client.get('/').get_data(as_text=True)
     assert '寒潮、气压变化' not in body
-    assert '寒冷健康评估仍在研究中' in body
+    assert '查看都昌天气，安排高温天的家庭照护' in body
+    assert '寒冷健康评估仍在研究中' not in body
     assert '免登录查看今日天气' in body
     assert '/guest' in body
 
@@ -117,3 +119,57 @@ def test_production_agriculture_nav_and_inline_nonce_survive_port(app, db_sessio
     assert '<script nonce="test-agriculture-nonce">' in body
     assert '<style nonce="test-agriculture-nonce">' in body
     assert '机器学习分类 · 已停用' not in body or 'href="/ml-prediction"' not in body
+
+
+@pytest.mark.parametrize('elder_mode', [False, True])
+@pytest.mark.parametrize('source_case,expected', [
+    ('missing', '官方预警数据暂未获取'),
+    ('failed', '官方预警数据暂未获取'),
+    ('expired', '官方预警数据已过期'),
+    ('empty', '本次查询：暂无官方预警'),
+    ('nonempty', '当前展示 0 条有效预警'),
+    ('undated', '官方预警更新时间待确认'),
+])
+def test_public_warning_copy_uses_source_receipt(app, db_session, monkeypatch, elder_mode, source_case, expected):
+    from services.public_service import render_public_risk_page
+    now = utcnow()
+    snapshot = {'location': {'name': '都昌县'}, 'risk': {'available': False}, 'warnings': []}
+    state = {'available': True, 'provider': 'QWeather', 'status': 'ok',
+             'fetched_at': (now - timedelta(minutes=5)).isoformat(),
+             'expires_at': (now + timedelta(minutes=15)).isoformat()}
+    if source_case == 'failed':
+        state.update(available=False, status='fetch_failed')
+    elif source_case == 'expired':
+        state['expires_at'] = (now - timedelta(minutes=1)).isoformat()
+    elif source_case == 'nonempty':
+        snapshot['warnings'] = [{'title': '历史预警'}]
+    elif source_case == 'undated':
+        state.pop('fetched_at')
+    if source_case != 'missing':
+        snapshot['source_status'] = {'warnings': state}
+    monkeypatch.setattr('services.public_service.get_bootstrap_payload', lambda: snapshot)
+    monkeypatch.setattr('services.public_service.public_official_alerts', lambda _: [])
+    with app.test_request_context('/risk'):
+        body = render_public_risk_page(None, elder_mode=elder_mode)
+    assert expected in body
+    assert body.count('data-hazard-card=') == 4
+    assert '寒冷健康评分尚未提供' in body
+    assert '统一免责声明' not in body
+    if source_case != 'empty':
+        assert '本次查询：暂无官方预警' not in body
+
+
+@pytest.mark.parametrize('change', [
+    {'provider': 'unavailable'}, {'available': False}, {'fetched_at': 'invalid'},
+    {'fetched_at': '2026-10-11T12:00:00'}, {'expires_at': None},
+])
+def test_warning_receipt_missing_evidence_never_claims_none(change):
+    from services.public_weather_presenter import public_warning_state
+    now = utcnow()
+    state = {'available': True, 'provider': 'QWeather', 'status': 'ok',
+             'fetched_at': (now - timedelta(minutes=5)).isoformat(),
+             'expires_at': (now + timedelta(minutes=15)).isoformat()}
+    state.update(change)
+    result = public_warning_state({'source_status': {'warnings': state}, 'warnings': []}, [], now=now)
+    assert result['status'] == 'unknown'
+    assert '暂无官方预警' not in result['message']

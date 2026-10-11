@@ -51,15 +51,18 @@ def _trusted_qweather_current(
     }
 
 
-def test_forecast_page_loads_chartjs(client, db_session):
+def test_empty_forecast_keeps_page_assets_without_an_empty_chart(client, db_session, monkeypatch):
     user = _create_user(db_session, username='forecast_user')
     _login_as(client, user.id)
+    for name in ('get_qweather_forecast_with_cache', 'get_openmeteo_forecast_with_cache'):
+        monkeypatch.setattr(f'blueprints.tools.{name}', lambda *_a, **_k: ([], False, {}))
 
     response = client.get('/forecast-7day')
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert 'id="forecastChart"' in body
+    assert 'id="forecastChart"' not in body
+    assert '7 天预报正在更新' in body
     assert '/static/vendor/chartjs/chart.umd.min.js' in body
 
 
@@ -163,7 +166,7 @@ def test_forecast_page_qweather_failure_does_not_render_demo_heat(client, db_ses
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '7 天天气正在更新' in body
+    assert '7 天预报正在更新' in body
     assert '34° / 26°' not in body
     assert '35° / 27°' not in body
 
@@ -224,8 +227,8 @@ def test_forecast_page_reads_openmeteo_cache_without_health_model(
     body = response.get_data(as_text=True)
     assert '来源：Open-Meteo' in body
     assert '31° / 22°' in body
-    assert '健康关注分待计算' in body
-    assert '7 天天气正在更新' not in body
+    assert '天气关注分未知' in body
+    assert '7 天预报正在更新' not in body
 
 
 def test_forecast_page_stale_qweather_only_renders_weather_cards(
@@ -273,7 +276,7 @@ def test_forecast_page_stale_qweather_only_renders_weather_cards(
     body = response.get_data(as_text=True)
     assert '来源：和风天气' in body
     assert '30° / 20°' in body
-    assert '健康关注分待计算' in body
+    assert '天气关注分未知' in body
 
 
 def test_forecast_api_default_uses_qweather_only_data(client, db_session, monkeypatch):
@@ -562,8 +565,8 @@ def test_ml_prediction_page_is_research_only_without_loading_or_weather(client, 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
     assert 'RF 已退出生产预测' in body
-    assert '尚无时间外测试' in body
-    assert '只有训练集表现' in body
+    assert '按时间切分数据' in body
+    assert '模型训练与训练集评估' in body
     assert '本次天气调整关注分' not in body
     assert 'name="age"' not in body
     assert 'name="chronic"' not in body
@@ -664,7 +667,7 @@ def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch
     assert response.status_code == 200
     body = response.get_data(as_text=True)
     assert 'Method Not Allowed' not in body
-    assert '综合风险评分' in body
+    assert '照护关注分' in body
     assert '按时服药' in body
     assert 'Raw DLNM RR 1.2' in body
     assert 'DLNM病种修正 ×1.1' in body
@@ -711,11 +714,11 @@ def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatc
     assert ml_response.status_code == 200
     assert chronic_response.status_code == 200
     assert 'RF 已退出生产预测' in ml_response.get_data(as_text=True)
-    assert '天气正在更新，本次提醒暂未生成' in chronic_response.get_data(as_text=True)
+    assert '当前天气数据不可用，暂无法生成慢病照护提醒' in chronic_response.get_data(as_text=True)
     assert '模拟值不会进入' not in ml_response.get_data(as_text=True)
     assert '模拟值不会进入' not in chronic_response.get_data(as_text=True)
     assert '本次天气调整关注分' not in ml_response.get_data(as_text=True)
-    assert '综合风险评分' not in chronic_response.get_data(as_text=True)
+    assert '慢病控制效果或患病概率' not in chronic_response.get_data(as_text=True)
 
 
 def test_chronic_risk_get_shows_empty_state_without_synthetic_result(client, db_session):
@@ -729,8 +732,8 @@ def test_chronic_risk_get_shows_empty_state_without_synthetic_result(client, db_
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '填写信息后生成评估' in body
-    assert '可查看风险提示与行动建议' in body
+    assert '填写信息后查看照护建议' in body
+    assert '提交后查看照护关注项与建议' in body
     assert '示例评分或示例医疗建议' not in body
     assert '>58<' not in body
     assert '本周内到社区医生处复诊' not in body
@@ -787,7 +790,8 @@ def test_cooling_page_empty_database_renders_safe_candidate_preview(
     assert '都昌志愿服务联合会' in body
     assert '待人工核验' in body
     assert '地点已核验' in body
-    assert '旧的待核验场所仍需联系确认' in body
+    assert '待核实线索' in body
+    assert '开放时间待确认' in body
     assert '都昌县人民医院' not in body
     assert '左里中心卫生院' not in body
     assert '万达广场' not in body

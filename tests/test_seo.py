@@ -169,9 +169,9 @@ def test_footer_links_to_trust_network_and_public_copy_avoids_internal_notes(cli
     assert "家庭信任网络" in home
     assert "你的论文" not in trust
     assert "登录后管理家庭照护" in trust
-    assert "受限的账号级产品事件" in trust
+    assert "以聚合统计改进流程" in trust
     assert "原始 IP" in trust
-    assert "不代表个人健康结果" in trust
+    assert "通过试点观察核实" in trust
 
 
 def test_llms_txt_lists_only_public_discovery_pages_and_privacy_boundary(client):

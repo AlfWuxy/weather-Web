@@ -106,8 +106,8 @@ def test_screening_mode_contract_and_amap_independent_startup(admin_client):
     assert "fullProfileFragments" in methodology_filter
     assert "数据不足，未参与排名" in methodology_filter
     assert "ASPECT 65+" in html
-    assert "NASA 历史夏季 LST" in html
-    assert "ESA 树木覆盖" in html
+    assert "夏季晴空地表温度" in html
+    assert "树木覆盖类面积占比" in html
     assert "q3_lst_c_mean" in screening_table
     assert "tree_cover_pct" in screening_table
     assert "q3_coverage_pct" in screening_table
@@ -124,16 +124,21 @@ def test_screening_mode_contract_and_amap_independent_startup(admin_client):
 def test_screening_metrics_have_visible_explanations_and_metric_details(admin_client):
     html = admin_client.get("/community-risk").get_data(as_text=True)
 
-    assert "这些指标怎么读" in html
-    assert '<h3 class="h6 mb-0"><i class="bi bi-info-circle"></i> 这些指标怎么读</h3>' in html
-    assert '<h4 class="label">相对脆弱性筛查得分' in html
-    assert '<h4 class="label">Q3 观测覆盖' in html
-    assert "三个主题在当前证据完整社区中分别转成相对分位" in html
-    assert "它不等同于社区普查老龄率" in html
-    assert "它不是当前气温、室内温度或人体体感" in html
-    assert "实际使用 100−树木覆盖率" in html
-    assert "它是进入筛查所需的证据质量字段，只展示、不计分" in html
-    assert "共享同一网格的社区会共享三个原始指标、筛查得分和并列名次" in html
+    assert '<details class="card cr-card mb-3 d-none" data-screening-only hidden>' in html
+    assert '结果依据：指标、公式与空间尺度</summary>' in html
+    assert '<h4 class="label">热脆弱性对比分' in html
+    assert '<h4 class="label">有效观测覆盖' in html
+    assert "三个主题在当前资料完整社区中分别转成相对分位" in html
+    assert "ASPECT 基于 2020 年人口资料估计各网格的年龄分布" in html
+    assert "Aqua MODIS 白天晴空地表温度" in html
+    assert "使用 100−树木覆盖类面积占比" in html
+    assert "覆盖率用于判断数据质量，不计入对比分" in html
+    assert "同一网格内的社区使用相同的三个原始指标，对比分相同、名次并列" in html
+    # 用户不展开方法也能看到年份、比较范围、数据质量与缺值状态。
+    assert "历史数据 · 县内相对比较" in html
+    assert "人口：ASPECT 2020 年估计；树木覆盖类面积占比：ESA 2020 年" in html
+    assert "有效观测覆盖表示数据质量；灰色为资料不足" in html
+    assert "本模式不提供预计额外就诊、SIR" not in html
 
     for metric_key in (
         "community_screening_score",
@@ -146,7 +151,7 @@ def test_screening_metrics_have_visible_explanations_and_metric_details(admin_cl
         assert f'data-metric-info="{metric_key}"' in html
 
     assert '/transparency#community-screening-score' in html
-    assert 'aria-label="查看“探索性相对脆弱性筛查得分（0–100）”的计算说明"' in html
+    assert 'aria-label="查看“社区热脆弱性对比”的计算说明"' in html
 
 
 def test_successful_refresh_restores_mode_specific_button_state():
@@ -181,8 +186,8 @@ def test_successful_refresh_restores_mode_specific_button_state():
         const label = { textContent: '正在刷新...' };
 
         restoreRiskRequestControls(page, button, label);
-        if (page.busy !== 'false' || button.disabled || label.textContent !== '刷新探索性筛查') {
-            throw new Error('探索性筛查刷新控件未恢复');
+        if (page.busy !== 'false' || button.disabled || label.textContent !== '刷新社区对比') {
+            throw new Error('社区对比刷新控件未恢复');
         }
 
         activeRankingMode = 'full_profile';
