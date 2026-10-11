@@ -8,12 +8,12 @@
     // 常量
     // ------------------------------------------------------------------
     const RAW_LAYERS = {
-        q3_lst_c_mean: {label: '晴空地表温度', unit: '°C', digits: 1},
-        age65_share_pct: {label: '65+ 人口比例', unit: '%', digits: 1},
-        tree_cover_pct: {label: '树木覆盖', unit: '%', digits: 1},
+        q3_lst_c_mean: {label: '夏季晴空地表温度', unit: '°C', digits: 1},
+        age65_share_pct: {label: '65+ 人口估计占比', unit: '%', digits: 1},
+        tree_cover_pct: {label: '树木覆盖类面积占比', unit: '%', digits: 1},
         built_up_pct: {label: '建成区覆盖', unit: '%', digits: 1},
         mean_elevation_m: {label: '表面高程', unit: 'm', digits: 0},
-        q3_coverage_pct: {label: 'Q3 观测覆盖', unit: '%', digits: 1}
+        q3_coverage_pct: {label: '有效观测覆盖', unit: '%', digits: 1}
     };
     const FACILITY_RAMP = {
         breaks: [0, 1, 2, 3, 5, 8, 99],
@@ -930,7 +930,7 @@
         const nodes = [];
         if (state.swipe) {
             nodes.push(el('div', 'hrw-legend-title', '卷帘对比'));
-            nodes.push(el('p', 'hrw-legend-note', '左：晴空地表温度；右：65+ 人口比例。拖动中线比较。'));
+            nodes.push(el('p', 'hrw-legend-note', '左：夏季晴空地表温度；右：2020 年 65+ 人口估计占比。拖动中线比较。'));
         } else if (state.layer === 'daily' || state.layer === 'score') {
             const day = currentDay();
             nodes.push(el('div', 'hrw-legend-title', state.layer === 'daily' ? `当日风险 · ${day ? dayLabel(day.date) : '预报不可用'}` : '历史结构脆弱性分'));
@@ -952,9 +952,9 @@
                 });
             });
             const wrap = el('div', 'hrw-bivariate-wrap');
-            wrap.append(el('span', 'hrw-bivariate-y', '↑ 65+ 比例'), grid, el('span', 'hrw-bivariate-x', '地表温度 →'));
+            wrap.append(el('span', 'hrw-bivariate-y', '↑ 65+ 比例'), grid, el('span', 'hrw-bivariate-x', '夏季晴空地表温度 →'));
             nodes.push(wrap);
-            nodes.push(el('p', 'hrw-legend-note', '右上角深色 = 又热又老'));
+            nodes.push(el('p', 'hrw-legend-note', '右上角深色：历史地表较热、老龄人口估计占比较高'));
         } else if (state.layer === 'facility_km') {
             nodes.push(el('div', 'hrw-legend-title', '距可达性参考点（km，直线）'));
             FACILITY_RAMP.palette.forEach((color, k) => nodes.push(legendRow(color, FACILITY_RAMP.labels[k])));
@@ -968,7 +968,8 @@
             });
             nodes.push(el('p', 'hrw-legend-note', '全县六分位，相对比较'));
         }
-        nodes.push(legendRow(NODATA_FILL, '无常住人口 / 无数据', 'is-muted'));
+        nodes.push(el('p', 'hrw-legend-note', '历史数据 · 县内相对比较。人口：ASPECT 2020 年估计；树木覆盖类面积占比：ESA 2020 年；夏季晴空地表温度：2020–2024 年白天观测。'));
+        nodes.push(legendRow(NODATA_FILL, '人口估计为零 / 数据缺失', 'is-muted'));
         if (state.basemap === 'none') nodes.push(legendRow(WATER_FILL, '湖面（不评分）', 'is-muted'));
         if (state.overlays.hotspot) {
             const row = el('div', 'hrw-legend-row hrw-legend-line');
@@ -1024,8 +1025,8 @@
             ui.levelChip.textContent = '网格数据缺失';
             ui.levelChip.style.backgroundColor = NODATA_FILL;
             ui.levelChip.style.color = '#2A2620';
-            ui.scoreSub.textContent = '仅供县级天气参考，不据此判定该点低风险。';
-            ui.dailyChip.textContent = '仅县级展示';
+            ui.scoreSub.textContent = '此处缺少网格数据；县级天气可在上方查看。';
+            ui.dailyChip.textContent = '县级天气见上方';
             ui.breakdown.replaceChildren();
             ui.facts.replaceChildren();
             ui.provenance.replaceChildren();
@@ -1046,10 +1047,10 @@
             ui.dailyChip.style.backgroundColor = '';
         } else if (!cell.scored) {
             ui.score.textContent = '—';
-            ui.levelChip.textContent = '无常住人口';
+            ui.levelChip.textContent = '人口估计为零';
             ui.levelChip.style.backgroundColor = NODATA_FILL;
             ui.levelChip.style.color = '#2A2620';
-            ui.scoreSub.textContent = 'ASPECT 模型显示该格无常住人口，不参与评分。';
+            ui.scoreSub.textContent = 'ASPECT 2020 年人口估计为零，此网格不参与评分。';
             ui.dailyChip.textContent = '—';
             ui.dailyChip.style.backgroundColor = '';
         } else {
@@ -1058,18 +1059,18 @@
             const span = cell.top_pct_p95 - cell.top_pct_p05;
             const stable = span <= state.meta.stability.stable_span_pct;
             ui.scoreSub.textContent = `全县前 ${fmt(cell.top_pct, 0)}%；权重扰动区间 前 ${fmt(cell.top_pct_p05, 0)}–${fmt(cell.top_pct_p95, 0)}%，${stable ? '排名稳定' : '排名对权重较敏感'}`;
-            ui.dailyChip.textContent = '仅县级展示';
+            ui.dailyChip.textContent = '县级天气见上方';
             ui.dailyChip.style.backgroundColor = '';
             ui.dailyChip.style.color = '';
         }
 
         const facility = state.facilities[cell.facility];
         ui.breakdown.replaceChildren(
-            el('div', 'hrw-breakdown-title', '风险构成（全县百分位）'),
-            barRow('危险性 · 地表温度', cell.hazard_pct, `${fmt(cell.p.q3_lst_c_mean, 1)} °C`),
-            barRow('暴露 · 65+ 比例', cell.exposure_pct, `${fmt(cell.p.age65_share_pct, 1)}%`),
+            el('div', 'hrw-breakdown-title', '历史结构分构成（全县百分位）'),
+            barRow('热环境 · 夏季晴空地表温度', cell.hazard_pct, `${fmt(cell.p.q3_lst_c_mean, 1)} °C`),
+            barRow('老龄人口 · 2020 年估计占比', cell.exposure_pct, `${fmt(cell.p.age65_share_pct, 1)}%`),
             barRow('脆弱性', cell.vulnerability_pct, null),
-            barRow('树荫缺口', cell.shade_deficit_pct, `树木覆盖 ${fmt(cell.p.tree_cover_pct, 0)}%`, true),
+            barRow('低树木覆盖', cell.shade_deficit_pct, `树木覆盖类面积占比 ${fmt(cell.p.tree_cover_pct, 0)}%`, true),
             barRow('建成区', cell.built_pct, `${fmt(cell.p.built_up_pct, 0)}%`, true),
             barRow('可达性参考点距离', cell.access_pct, `${fmt(cell.facility_km, 1)} km`, true)
         );
@@ -1082,7 +1083,7 @@
         fact(ui.facts, '模型可达性参考点', facility ? `${referenceName(facility)} · ${fmt(cell.facility_km, 1)} km（直线）` : '—');
         fact(ui.facts, '近似永久水域', `${fmt(cell.p.permanent_water_pct, 1)}%`);
         fact(ui.facts, '表面高程', `${fmt(cell.p.mean_elevation_m, 0)} m`);
-        fact(ui.facts, 'Q3 合格观测', `${cell.p.q3_dates} / ${cell.p.local_available_dates} 天`);
+        fact(ui.facts, '有效观测（Q3）', `${cell.p.q3_dates} / ${cell.p.local_available_dates} 天`);
 
         ui.provenance.replaceChildren();
         fact(ui.provenance, 'cell ID', cell.id);
@@ -1216,7 +1217,7 @@
             fact(details, '人口', isNum(p.population) ? `${fmt(p.population, 0)} 人` : '待补充（未知）');
             fact(details, '老人比例', isNum(p.elderly_ratio) ? `${fmt(p.elderly_ratio * 100, 1)}%` : '待补充（未知）');
             fact(details, '距已收录医疗机构', isNum(p.nearest_medical_km) ? `${fmt(p.nearest_medical_km, 1)} km（直线）` : '暂无可用记录，不代表附近无机构');
-            if (!isLevel(p.static_level)) fact(details, '风险数据', '网格数据缺失，仅供县级天气参考');
+            if (!isLevel(p.static_level)) fact(details, '风险数据', '网格数据缺失；县级天气见上方');
         } else {
             if (locationVerified) fact(details, '开放时间', p.open_hours || '未提供');
             fact(details, '开放情况', p.open_hours ? `来源记录时段：${p.open_hours}；当前开放情况待核实` : '开放情况待核实');
@@ -1452,7 +1453,7 @@
         ui.priorityList.replaceChildren();
         const villages = priorityForDay();
         const known = isLevel(currentHazard());
-        ui.priorityNote.textContent = '按历史结构分排序；县级天气不参与，不能作为村级实时风险或逐户健康判断。';
+        ui.priorityNote.textContent = '按历史结构分查看差异、安排实地核查。县级天气见上方。';
         if (!villages.length) {
             ui.priorityList.appendChild(el('li', 'hrw-empty', '当前范围暂无可参与结构筛查的村点；可在点位列表查看已收录资料。'));
         }
@@ -1509,7 +1510,7 @@
             ui.lede.textContent = `${demoPrefix()}${when}都昌无高温（最高 ${fmt(day.temperature_max, 0)} °C），按常规随访。${top ? `历史结构最高的已收录聚落点：${top.name}（综合分 ${fmt(top.static_score, 0)}）。` : ''}`;
             return;
         }
-        ui.lede.textContent = `${demoPrefix()}${when}都昌热危险 ${day.level} 级 · ${day.label}${reasons}。地图与核实清单仅反映历史结构。`;
+        ui.lede.textContent = `${demoPrefix()}${when}都昌热危险 ${day.level} 级 · ${day.label}${reasons}。地图与核实清单展示历史基础条件。`;
     }
 
     // ------------------------------------------------------------------

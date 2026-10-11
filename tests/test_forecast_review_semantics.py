@@ -48,7 +48,8 @@ def test_valid_external_score_is_used_and_marked_unvalidated(forecast, score, sp
     assert result['calibration_status'] == 'unvalidated'
     assert result['inputs']['external_score_status'] == 'valid'
     assert result['inputs']['lead_penalty'] is None
-    assert '非实测准确率' in result['note']
+    assert '校准情况待核实' in result['note']
+    assert '分数与实际预报误差的对应关系待验证' in result['limitations']
 
 
 @pytest.mark.parametrize('external', [None, float('nan'), float('inf'), -1, 101, True, 'bad'])
@@ -152,3 +153,185 @@ def test_unexpected_timezone_is_not_mislabeled(monkeypatch):
     result, _ = _nowcast(monkeypatch, {'time': ['2026-10-06T12:00']}, timezone='GMT')
     assert result['available'] is False
     assert result['reason'] == 'unexpected_timezone'
+
+
+# 用真实卡片适配器构造页面输入，单独验证默认内容与展开内容的边界。
+def _render_forecast_copy(days, *, no_health=False, template='forecast_7day.html'):
+    from pathlib import Path
+    from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader
+    from services.forecast_cards import build_forecast_cards
+
+    start = date(2026, 10, 11)
+    weather = [{'date': (start + timedelta(days=i)).isoformat(), 'data_source': 'QWeather',
+                'temperature_max': 25, 'temperature_min': 15, 'humidity': 70,
+                'wind_speed': 2, 'condition': '晴'} for i in range(len(days))]
+    service = ForecastService.__new__(ForecastService)
+    health = [{'date': item['date'], 'composite_exposure': service._composite_exposure_risk(
+                    20, temp_min=15, humidity=70),
+               'predictability': service._calculate_predictability(i + 1)}
+              for i, item in enumerate(weather)]
+    cards = build_forecast_cards(weather, [] if no_health else health, start)
+    for card, overrides in zip(cards, days):
+        card.update(overrides)
+    env = Environment(loader=ChoiceLoader([
+        DictLoader({'base.html': '{% block content %}{% endblock %}',
+                    'partials/metric_info.html': '{% macro metric_info(key, context={}) %}{% endmacro %}'}),
+        FileSystemLoader(str(Path(__file__).resolve().parents[1] / 'templates')),
+    ]), autoescape=True)
+    if template == 'user_dashboard.html':
+        source = (Path(__file__).resolve().parents[1] / 'templates' / template).read_text()
+        source = source[source.index('        {# 7 日预测 #}'):source.index('        {# 家人概览 #}')]
+        template_obj = env.from_string('{% from "partials/metric_info.html" import metric_info %}' + source)
+    else:
+        template_obj = env.get_template(template)
+    return template_obj.render(
+        url_for=lambda *_a, **_k: '/forecast-7day',
+        request=SimpleNamespace(args={}), current_location='都昌', location_options=[],
+        forecast_meta={'source_label': 'QWeather'}, forecast_error=None,
+        forecast_days=cards, weekly_tips=[],
+    )
+
+
+
+def _parse_forecast_copy(html):
+    from html.parser import HTMLParser
+
+    class CopyParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.details = []
+            self.cards = []
+            self.visible = []
+            self.text = []
+            self.in_details = False
+            self.in_script = False
+            self.has_chart = False
+
+        def handle_starttag(self, tag, attrs):
+            values = dict(attrs)
+            if tag == 'script':
+                self.in_script = True
+            if tag == 'details':
+                self.in_details = True
+                self.details.append({'attrs': values, 'text': ''})
+            if tag == 'div' and values.get('data-risk') == 'attention':
+                self.cards.append('')
+            if tag == 'canvas' and values.get('id') == 'forecastChart':
+                self.has_chart = True
+
+        def handle_endtag(self, tag):
+            if tag == 'details':
+                self.in_details = False
+            if tag == 'script':
+                self.in_script = False
+
+        def handle_data(self, data):
+            if self.in_script:
+                return
+            self.text.append(data)
+            if self.cards:
+                self.cards[-1] += data
+            if self.in_details:
+                self.details[-1]['text'] += data
+            else:
+                self.visible.append(data)
+
+    parser = CopyParser()
+    parser.feed(html)
+    parser.text = ''.join(parser.text)
+    parser.visible = ''.join(parser.visible)
+    return parser
+
+
+def test_forecast_copy_puts_reference_scores_inside_closed_details():
+    page = _parse_forecast_copy(_render_forecast_copy([{} for _ in range(7)]))
+    assert len(page.details) == 7
+    for i, detail in enumerate(page.details):
+        assert 'open' not in detail['attrs']
+        assert '结果依据' in detail['text']
+        assert f'预报参考分（规则计算）：{60 - i * 3}.0' in detail['text']
+        assert '按提前天数计算，最高 60 分' in detail['text']
+        assert '分数与实际预报误差的对应关系待验证' in detail['text']
+    assert page.visible.count('本周 PM2.5 预报缺失。') == 1
+    assert page.visible.count('天气关注分 2') == 7
+    assert page.visible.count('规则评分 · 低关注') == 7
+    assert '预报参考分' not in page.visible
+    assert '门诊' not in page.visible and '就诊' not in page.visible
+    assert '本周重点关注日' not in page.visible
+    assert '本周建议' not in page.visible
+
+
+def test_forecast_copy_preserves_day_specific_missing_fields_and_zero():
+    html = _render_forecast_copy([
+        {'pm25_used': 15, 'pm25_source': 'direct', 'risk_score': 0},
+        {'unknown_components': ['pm25', 'humidity'], 'risk_score': 80, 'risk_label': '高关注'},
+        {'temp_high': None, 'risk_available': False, 'risk_score': None,
+         'unknown_components': ['heat', 'pm25']},
+    ])
+    page = _parse_forecast_copy(html)
+    assert '天气关注分 0' in page.cards[0]
+    assert '本日 PM2.5 预报缺失' not in page.cards[0]
+    assert '湿度资料缺失' in page.cards[1]
+    assert '本日 PM2.5 预报缺失' in page.cards[1]
+    assert '未知 / 15°' in page.cards[2]
+    assert '温度资料缺失' in page.cards[2]
+    assert '天气关注分未知' in page.cards[2]
+    assert 'None°' not in html
+    assert '本周 PM2.5 预报缺失' not in html
+    assert page.has_chart
+    assert '本周重点关注日' in page.text
+    assert '资料缺失的日期在图中留空。' in page.text
+
+
+@pytest.mark.parametrize('days', [[], [{} for _ in range(7)]])
+def test_forecast_copy_hides_empty_charts_and_clinic_modules(days):
+    page = _parse_forecast_copy(_render_forecast_copy(days, no_health=True))
+    assert not page.has_chart
+    assert page.details == []
+    assert '本周重点关注日' not in page.text
+    assert '本周建议' not in page.text
+    assert '门诊' not in page.text and '就诊' not in page.text
+    if days:
+        assert page.text.count('天气关注分未知') == 7
+        assert page.text.count('25° / 15°') == 7
+        assert '天气关注分按其余可用分项计算。' not in page.text
+    else:
+        assert page.text.count('7 天预报正在更新') == 1
+
+
+@pytest.mark.parametrize('branch,score,method_text', [
+    ('external', 0, '采用上游提供的参考分'),
+    ('derived', 99, '按多模型温差与提前天数计算'),
+])
+def test_forecast_copy_keeps_actual_external_and_multimodel_reference(branch, score, method_text):
+    page = _parse_forecast_copy(_render_forecast_copy([{
+        'predictability_branch': branch, 'predictability_score': score,
+        'predictability_model_spread': 0 if branch == 'derived' else None,
+    }]))
+    detail = page.details[0]['text']
+    assert f'预报参考分（规则计算）：{score}' in detail
+    assert method_text in detail
+    assert '准确率' not in detail
+    if branch == 'derived':
+        assert '模型温差 0°C' in detail
+
+
+@pytest.mark.parametrize('no_health', [False, True])
+def test_dashboard_forecast_uses_same_visible_score_and_closed_basis(no_health):
+    page = _parse_forecast_copy(_render_forecast_copy(
+        [{} for _ in range(7)], no_health=no_health, template='user_dashboard.html'))
+    assert len(page.cards) == 7
+    assert '门诊' not in page.text and '高负荷' not in page.text
+    assert '7 日健康预测' not in page.text
+    assert '预报参考分' not in page.visible
+    assert page.visible.count('本周 PM2.5 预报缺失。') == 1
+    assert page.visible.count('25° / 15°') == 7
+    if no_health:
+        assert page.details == []
+        assert page.visible.count('天气关注分未知') == 7
+    else:
+        assert page.visible.count('天气关注分 2') == 7
+        assert page.visible.count('规则评分 · 低关注') == 7
+        assert len(page.details) == 7
+        assert all('open' not in item['attrs'] for item in page.details)
+        assert '预报参考分（规则计算）：60.0' in page.details[0]['text']

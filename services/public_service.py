@@ -71,7 +71,9 @@ from services.community_daily_service import (
 )
 from services.heat_action_service import HeatActionService
 from services.cooling_service import compute_verify_status, present_cooling_cards
-from services.public_weather_presenter import public_official_alerts, configured_miniprogram_qr
+from services.public_weather_presenter import (
+    public_official_alerts, configured_miniprogram_qr, public_warning_state,
+)
 from services.guest_experience import (
     GuestExperienceError,
     delete_experience,
@@ -1887,6 +1889,7 @@ def render_public_risk_page(location, elder_mode=False):
     heat_result = dict(stored_heat_result) if risk_ready else None
     risk_reasons = list(stored_risk_reasons) if risk_ready else []
     risk_label = risk.get('level') if risk_ready else None
+    official_alerts = public_official_alerts(location_name)
     return render_template(
         'risk.html',
         location=location_name,
@@ -1897,7 +1900,8 @@ def render_public_risk_page(location, elder_mode=False):
         actions=snapshot.get('actions') or [],
         risk_reasons=risk_reasons,
         family_reminder=snapshot.get('family_reminder'),
-        official_alerts=public_official_alerts(location_name),
+        official_alerts=official_alerts,
+        official_warning_state=public_warning_state(snapshot, official_alerts),
         elder_mode=elder_mode,
         miniprogram_qr=configured_miniprogram_qr(),
     )

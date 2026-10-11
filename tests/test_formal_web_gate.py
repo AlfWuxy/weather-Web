@@ -207,16 +207,25 @@ def test_web_only_runtime_preserves_legacy_registration(app, client, db_session)
 def test_dual_runtime_forecast_uses_route_auth_and_renders_normally(
     app,
     authenticated_client,
+    monkeypatch,
 ):
     """双端开关开启后，预报页不得再被中央门禁送到行动页。"""
     app.config["WECHAT_FORMAL_RUNTIME"] = True
     app.config["WEB_PRIVATE_FEATURES_ENABLED"] = True
 
+    # 空缓存也应正常渲染页面，图表只在有实际关注分时出现。
+    for name in ('get_qweather_forecast_with_cache', 'get_openmeteo_forecast_with_cache'):
+        monkeypatch.setattr(f'blueprints.tools.{name}', lambda *_a, **_k: ([], False, {}))
+
     response = authenticated_client.get("/forecast-7day", follow_redirects=False)
 
     assert response.status_code == 200
     assert response.request.path == "/forecast-7day"
-    assert 'id="forecastChart"' in response.get_data(as_text=True)
+    body = response.get_data(as_text=True)
+    assert '7 天预报正在更新' in body
+    assert 'id="forecastChart"' not in body
+    assert '天气关注分 0' not in body
+    assert '本周重点关注日' not in body
 
 
 def test_dual_runtime_private_route_still_requires_login(app, client):

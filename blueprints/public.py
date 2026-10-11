@@ -593,7 +593,12 @@ def elder_token_debrief(token):
 def transparency():
     """透明度说明"""
     from services.model_validation_service import get_validation_scorecard
-    return render_template('transparency.html', validation_scorecard=get_validation_scorecard())
+    from services.dlnm_risk_service import get_configured_profile_metadata
+    return render_template(
+        'transparency.html',
+        validation_scorecard=get_validation_scorecard(),
+        configured_profile=get_configured_profile_metadata(),
+    )
 
 
 @bp.route('/cooling', endpoint='cooling_resources')

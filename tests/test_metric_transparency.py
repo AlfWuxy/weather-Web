@@ -46,7 +46,7 @@ def test_transparency_page_renders_formula_index(client):
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '每一个风险数字都应该能被解释' in body
+    assert '查看评分依据、数据来源与验证结果' in body
     assert 'Score = 100 × [0.50×HI_norm + 0.30×Night_norm + 0.20×Streak_norm]' in body
     assert 'id="community-risk-index"' in body
     assert 'id="community-screening-score"' in body
@@ -58,14 +58,16 @@ def test_transparency_page_renders_formula_index(client):
     assert 'Score = [P(age65_share_pct) + P(q3_lst_c_mean) + P(100−tree_cover_pct)] / 3' in body
     assert 'Publish = 1{validation_pass = true ∧ status = pass ∧ hard_failures = 0}' in body
     assert '缺失值处理' in body
-    assert '已知局限' in body
+    assert '适用范围与验证计划' in body
     assert 'Open-Meteo' in body
     assert 'metric-explanations.js' in body
-    assert '探索性空间筛查轨与完整画像风险轨分开运行' in body
-    assert '探索性筛查得分只用于安排后续核查与数据收集顺序' in body
-    assert '不授权医疗资源配置' in body
-    assert '来源证据状态：HOLD' in body
-    assert '现有程序尚未机器核验字段来源、单位、观测时点、社区标识或基线时间窗口' in body
+    assert '社区热脆弱性对比使用三个等权主题' in body
+    assert '社区对比帮助安排实地核查' in body
+    assert '八个数值字段' in body
+    assert '基线人口和时间口径' in body
+    assert '外部汇总输入还核对社区名称、来源信息和审核日期格式' in body
+    assert '原始资料的真实性、统计覆盖、单位及实际观察时间，由资料审核确认' in body
+    assert '来源证据状态：HOLD' not in body
     assert '稳定的中性代理值' not in body
     assert '通过来源、单位和有效值核验' not in body
 
@@ -135,7 +137,7 @@ def test_public_risk_fails_closed_for_mock_weather(
     assert '天气更新中' in body
     assert '当前风险：低风险' not in body
     assert '综合评分 0.0' not in body
-    assert '风险等级暂不显示' in body
+    assert '天气数据不足，暂无法评估高温等级' in body
     assert '附近避暑资源' in body
 
 
@@ -213,7 +215,7 @@ def test_integrity_catalog_preserves_production_boundaries():
     assert 'Population×1000' in metrics['community_weather_hazard']['formula']
     assert '0.93' not in str(metrics['community_risk_index'])
     assert '6×ExpectedExcess' not in metrics['community_impact_likelihood']['formula']
-    assert '不生成村级或网格实时等级' in metrics['gis_daily_level']['summary']
+    assert '县级' in metrics['gis_daily_level']['summary']
     assert 'adj' not in metrics['gis_daily_level']['formula']
     group = next(group for group in METRIC_EXPLANATION_GROUPS if group['id'] == 'gis_workbench')
-    assert '不生成网格或村级实时排名' in group['description']
+    assert '县级' in group['description']

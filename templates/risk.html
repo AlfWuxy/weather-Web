@@ -9,11 +9,12 @@
 {% endblock %}
 
 {% block content %}
+{% set official_warning_state = official_warning_state|default({'message': '官方预警获取状态待确认。', 'fetched_at': none}) %}
 <div class="container my-4{% if elder_mode %} public-elder{% endif %}">
     <div class="row mb-3">
         <div class="col-12">
             <h1 class="h2"><i class="bi bi-thermometer-sun"></i> 县级今日天气与行动{% if elder_mode %} · 大字版{% endif %}</h1>
-            <p class="text-muted mb-0">四类信息分别查看。高温评分不代表降雨、寒冷或其他灾害安全；不提供医疗诊断或治疗建议。</p>
+            <p class="text-muted mb-0">查看本县高温、降雨与官方预警，安排今天的活动。</p>
         </div>
     </div>
 
@@ -22,7 +23,7 @@
         <select id="publicCounty" class="form-control w-auto" name="location" data-public-location><option value="{{ location }}">{{ location }}</option></select>
         <button class="btn btn-outline-primary" type="submit">查看本县</button>
         <a class="btn btn-outline-secondary" href="{{ url_for('user.elder_dashboard', location=location) if not elder_mode else url_for('public.public_risk', location=location) }}">{{ '大字版' if not elder_mode else '标准版' }}</a>
-        <span class="text-muted align-self-center">地点仅保存在本机浏览器，不建立健康档案。</span>
+        <span class="text-muted align-self-center">地点保存在本机浏览器。</span>
     </form>
 
     <section class="card mb-4 {{ 'border-danger' if official_alerts else '' }}" data-hazard-card="official" aria-labelledby="officialTitle">
@@ -35,8 +36,11 @@
                 <small>来源：QWeather 官方预警 · {{ alert.location }} · 有效至 {{ alert.ends_at }}</small>
             </article>
             {% else %}
-            <p class="mb-0">暂无已获取且仍在有效期内的官方预警。预警数据可能不完整，请同时留意当地气象部门通知；这不表示当前没有预警。</p>
+            <p class="mb-0">{{ official_warning_state.message }}</p>
             {% endfor %}
+            {% if official_alerts %}<p class="small text-muted mb-1">{{ official_warning_state.message }}</p>{% endif %}
+            {% if official_warning_state.fetched_at %}<p class="small text-muted mb-1">获取时间：{{ official_warning_state.fetched_at }}</p>{% endif %}
+            <a class="d-inline-block mt-2" href="https://www.cma.gov.cn/" target="_blank" rel="noopener noreferrer">查看中国气象局官方信息</a>
         </div>
     </section>
 
@@ -56,6 +60,7 @@
                 </div>
                 <div class="card-body">
                     <div class="mb-2 text-muted">地区：{{ location }}</div>
+                    <p class="small text-muted">本站高温提醒等级，用于安排补水、降温和照护；分数按规则计算，不是患病概率。</p>
                     <div class="mb-3">
                         <span class="badge bg-light text-dark">综合评分 {{ heat_result.risk_score if heat_result and heat_result.risk_score is not none else '--' }} {{ metric_info('heat_risk_score', heat_context) }}</span>
                         <span class="badge bg-light text-dark">体感热 {{ heat_result.heat_index if heat_result and heat_result.heat_index is not none else '--' }} {{ metric_info('heat_index', {'当前气温': (weather.temperature|string ~ '°C') if weather and weather.temperature is not none else '--', '当前湿度': (weather.humidity|string ~ '%') if weather and weather.humidity is not none else '--', '计算体感热': (heat_result.heat_index|string ~ '°C') if heat_result and heat_result.heat_index is not none else '--'}) }}</span>
@@ -77,7 +82,7 @@
                             <span class="text-muted small">仅保存在本机</span>
                         </div>
                     </div>
-                    <h6 class="mb-2">为什么危险 {{ metric_info('heat_risk_score', heat_context) }}</h6>
+                    <h6 class="mb-2">提醒依据 {{ metric_info('heat_risk_score', heat_context) }}</h6>
                     {% if risk_reasons and risk_reasons|length > 0 %}
                         {% for reason in risk_reasons %}
                             <div class="mb-2">
@@ -91,7 +96,7 @@
                             </div>
                         {% endfor %}
                     {% else %}
-                        <div class="text-muted small mb-3">暂无足够数据解释风险来源。</div>
+                        <div class="text-muted small mb-3">提醒依据暂缺。</div>
                     {% endif %}
                     <h6 class="mb-2">建议行动</h6>
                     <ul class="mb-0">
@@ -108,13 +113,13 @@
                 </div>
                 <div class="card-body">
                     <div class="mb-2 text-muted">地区：{{ location }}</div>
-                    <p class="mb-0">风险等级暂不显示。你可以先查看通用防护和附近避暑资源。</p>
+                    <p class="mb-0">天气数据不足，暂无法评估高温等级。先查看防暑建议和附近避暑资源。</p>
                 </div>
             </div>
             {% endif %}
             <div class="mt-3">{% include 'partials/rainfall_card.html' %}</div>
             <section class="card shadow-sm mt-3" data-hazard-card="cold">
-                <div class="card-body"><h5>寒冷 · 研究中</h5><p class="mb-0">当前未提供经验证的寒冷健康评分。请查看官方寒潮预警，及时保暖。</p></div>
+                <div class="card-body"><h5>寒冷 · 研究中</h5><p class="mb-0">寒冷健康评分尚未提供。寒潮信息请查看上方官方预警，并按预警提示保暖。</p></div>
             </section>
         </div>
         <div class="col-lg-5">
@@ -169,8 +174,9 @@
             </div>
             <div class="card shadow-sm">
                 <div class="card-body">
-                    <h6 class="mb-2"><i class="bi bi-shield-check"></i> 统一免责声明</h6>
+                    <h6 class="mb-2"><i class="bi bi-shield-check"></i> 使用说明</h6>
                     {% include "partials/disclaimer_block.html" %}
+                    <a class="small" href="{{ url_for('public.transparency') }}">查看计算方法与验证情况</a>
                 </div>
             </div>
         </div>

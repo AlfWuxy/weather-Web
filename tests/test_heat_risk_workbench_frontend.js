@@ -136,7 +136,7 @@ function payload(options = {}) {
 function assertUnknown(h) {
     assert.equal(h.currentHazard(), null);
     assert.equal(h.ui.title.textContent, unknown);
-    assert.equal(h.ui.dailyChip.textContent, "仅县级展示");
+    assert.equal(h.ui.dailyChip.textContent, "县级天气见上方");
     assert.match(h.ui.actionCard.textContent, /风险暂不可判定/);
     assert.doesNotMatch(h.ui.actionCard.textContent, /常规随访|0 级/);
     assert.doesNotMatch(h.ui.lede.textContent, /无高温|常规随访/);
@@ -210,7 +210,7 @@ test('真实 0 级保持无高温与常规随访，旧版有效 payload 仍兼�
     delete data.forecast_status;
     h.applyDaily(data);
     assert.equal(h.currentHazard(), 0);
-    assert.equal(h.ui.dailyChip.textContent, "仅县级展示");
+    assert.equal(h.ui.dailyChip.textContent, "县级天气见上方");
     assert.match(h.ui.actionCard.textContent, /常规随访/);
     assert.match(h.ui.lede.textContent, /无高温/);
     assert.equal(h.ui.layerTabs[0].disabled, true);
@@ -356,8 +356,8 @@ test('村点无网格数据时不伪造0级，实际机构无网格时清除旧�
     data.medical_pois[0].cell_id = null;
     h.applyDaily(data);
     h.selectPoi('test:second', {pan: false});
-    assert.match(h.ui.poiDetails.textContent, /网格数据缺失，仅供县级天气参考/);
-    assert.equal(h.ui.dailyChip.textContent, "仅县级展示");
+    assert.match(h.ui.poiDetails.textContent, /网格数据缺失；县级天气见上方/);
+    assert.equal(h.ui.dailyChip.textContent, "县级天气见上方");
     assert.equal(h.ui.score.textContent, '—');
     h.selectPoi('medical:one', {pan: false});
     assert.equal(h.ui.score.textContent, '—');
@@ -707,7 +707,7 @@ test('切换县级天气不改变网格着色、村点等级或历史结构核�
     assert.equal(h.state.layers.villages.items[0].tooltip(), marker);
     assert.match(h.ui.actionCard.textContent, /县级行动卡/);
     assert.doesNotMatch(h.ui.priorityList.textContent, /当日/);
-    assert.equal(h.ui.dailyChip.textContent, '仅县级展示');
+    assert.equal(h.ui.dailyChip.textContent, '县级天气见上方');
     h.setLayer('daily');
     assert.equal(h.state.layer, 'score');
 });

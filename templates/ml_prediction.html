@@ -4,8 +4,8 @@
 <div class="container py-4">
   <h1>RF 研究说明</h1>
   <div class="alert alert-secondary" role="status">RF 已退出生产预测</div>
-  <p>现有模型只有训练集表现，尚无时间外测试，不能据此判断对新日期或新用户的预测能力。</p>
-  <p>本页不再生成疾病类别、个人风险分或准确率承诺。研究代码仍保留，完成滚动起点验证并与朴素基线比较后，另行评估是否适合应用。</p>
+  <p>已完成：模型训练与训练集评估。下一步：按时间切分数据，检查模型对后续日期的预测表现。</p>
+  <p>本页介绍研究进展。研究代码已保留，后续将报告滚动起点验证结果与朴素基线对比，再评估应用范围。</p>
   <a href="{{ url_for('user.health_assessment') }}" class="btn btn-outline-primary">查看健康评估与资料完整度</a>
 </div>
 {% endblock %}

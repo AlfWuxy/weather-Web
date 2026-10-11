@@ -295,6 +295,8 @@ def test_cooling_first_frame_and_filters_are_truthful(client, db_session, monkey
     assert 'id="coolingResourceType"' in body
     assert 'mailto:wuxy.alf2024@gdhfi.com' in body
     assert '共建避暑资源' in body
+    assert '出发前看天气、地点开放时间与接待条件' in body
+    assert '温度仅供查看' not in body
 
 
 def test_footer_discloses_operator_type_and_contact(client):

@@ -102,8 +102,12 @@ def test_health_assessment_post_persists_academic_payload(
     html = response.get_data(as_text=True)
     assert '最新评估结果' in html
     assert '评估依据' in html
-    assert '行动筛查影响分' in html
-    assert '个人结局概率尚未完成校准' in html
+    assert '照护关注分' in html
+    assert '行动筛查影响分' not in html
+    assert 'Impact × Likelihood 矩阵未启用' not in html
+    assert '个人结局概率尚未完成校准' not in html
+    assert '综合位置' not in html
+    assert '天气更新期间，请稍后再试' not in html
     assert 'AQI 62.0' in html
 
     assessment = HealthRiskAssessment.query.order_by(HealthRiskAssessment.id.desc()).first()
@@ -326,10 +330,10 @@ def test_legacy_assessment_without_matrix_does_not_render_false_low_bucket(
 
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert '这条历史记录没有完整的评估依据' in html
-    assert '影响程度：<strong>--</strong>' in html
-    assert '发生可能性：<strong>--</strong>' in html
-    assert '综合位置 -- / 16' in html
+    assert '暂时没有更多评估依据' in html
+    assert '影响程度：' not in html
+    assert '发生可能性：' not in html
+    assert '综合位置' not in html
     assert '影响程度：<strong>low</strong>' not in html
 
 
@@ -393,3 +397,44 @@ def test_legacy_academic_profile_shapes_never_break_assessment_page(
         list,
     ):
         assert '安全路径' in body
+
+
+def test_unknown_assessment_shows_exact_missing_inputs_and_edit_link(authenticated_client, db_session, monkeypatch):
+    _seed_health_assessment_user(db_session)
+    user = User.query.filter_by(username='testuser').first()
+    user.age = None
+    user.chronic_diseases = None
+    db_session.commit()
+    monkeypatch.setattr('services.user.profile_service.get_weather_with_cache', lambda _: (_qweather_payload(), False))
+    response = authenticated_client.post('/health-assessment', data={
+        'outdoor_exposure': 'low', 'symptom_level': 'none', 'hydration': 'good',
+        'medication_adherence': 'good', 'sleep_quality': 'good', 'csrf_token': 'test-csrf-token',
+    }, follow_redirects=True)
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert '风险未知' in html
+    assert '缺失或待核实：年龄、慢病情况' in html
+    assert 'href="/profile">补充年龄和慢病情况' in html
+    assert '建议优先回访' in html
+    assert '已进入' not in html
+    assert '综合位置' not in html
+    assert 'AQI 62.0' in html
+    assert '缺失（已对其余可用指标重新归一）' not in html
+    latest = HealthRiskAssessment.query.order_by(HealthRiskAssessment.id.desc()).first()
+    assert latest.risk_score is None
+
+
+def test_available_historical_matrix_is_still_rendered(authenticated_client, db_session):
+    _seed_health_assessment_user(db_session)
+    user = User.query.filter_by(username='testuser').first()
+    db_session.add(HealthRiskAssessment(user_id=user.id, risk_score=40, risk_level='中风险',
+        explain=json.dumps({'academic_profile': {'impact_likelihood': {
+            'available': True, 'matrix_score': 6, 'impact_score': 40,
+            'impact_bucket': 2, 'likelihood_score': 60, 'likelihood_bucket': 3,
+        }}})))
+    db_session.commit()
+    response = authenticated_client.get('/health-assessment')
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert '影响与可能性' in html
+    assert '综合位置 6 / 16' in html

@@ -1,17 +1,18 @@
 {% extends "base.html" %}
 
 {% block title %}计算方法与透明度 - 宜老天气通{% endblock %}
-{% block meta_description %}了解宜老天气通如何计算都昌天气健康风险，包括数据来源、变量、权重、阈值、缺失值处理和已知局限。{% endblock %}
+{% block meta_description %}了解宜老天气通如何计算都昌天气健康风险，包括数据来源、变量、权重、阈值、缺失值处理和适用范围与验证计划。{% endblock %}
 
 {% block content %}
+{% set configured_profile = configured_profile|default({'status': 'unavailable'}) %}
 <div class="container my-4" style="max-width:1180px;">
     <section class="yl-transparency-hero mb-4">
         <div class="row g-4 align-items-center">
             <div class="col-lg-8">
                 <span class="section-kicker"><i class="bi bi-calculator"></i> 计算方法与透明度</span>
-                <h1 class="h2 mt-2">每一个风险数字都应该能被解释</h1>
+                <h1 class="h2 mt-2">查看评分依据、数据来源与验证结果</h1>
                 <p class="text-muted mb-3">
-                    本页公开网站当前实际执行的公式、变量、权重、阈值、时间窗口、缺失值处理和局限。
+                    本页说明各项结果的计算方式、使用的数据和验证进展。
                     页面数字旁的 <i class="bi bi-info-circle" aria-hidden="true"></i> 可以先看短解释，再回到这里核对完整方法。
                 </p>
                 <div class="yl-transparency-nav" aria-label="计算方法目录">
@@ -19,7 +20,7 @@
                     <a href="#{{ group.id }}">{{ group.title }}</a>
                     {% endfor %}
                     <a href="#data-provenance">数据与版本</a>
-                    <a href="#known-limits">已知局限</a>
+                    <a href="#known-limits">适用范围与验证计划</a>
                 </div>
             </div>
             <div class="col-lg-4">
@@ -37,7 +38,7 @@
     </section>
 
     <div class="alert alert-warning" role="note">
-        <strong>适用范围：</strong>探索性筛查得分只用于安排后续核查与数据收集顺序，不授权医疗资源配置。完整画像结果需先通过七字段数值完整性门，再作为项目内部行动核查参考。所有分数均不提供医疗诊断、处方或治疗建议；出现明显不适时应及时寻求专业帮助。
+        <strong>本站结果的用途：</strong>天气提醒帮助安排日常活动，照护评分帮助识别需要关注的事项，社区对比帮助安排实地核查。疾病诊疗与用药请咨询医务人员。
     </div>
 
     {% include 'partials/validation_scorecard.html' %}
@@ -92,10 +93,10 @@
 
                             {% if metric.limitations %}
                             <div class="small">
-                                <span class="text-muted fw-semibold">局限：</span>{{ metric.limitations|join('；') }}
+                                <span class="text-muted fw-semibold">适用范围与待验证项：</span>{{ metric.limitations|join('；') }}
                             </div>
                             {% endif %}
-                            <div class="small text-muted mt-2">实现位置：<code>{{ metric.source_file }}</code></div>
+                            <details class="small text-muted mt-2"><summary>查看实现位置</summary><code>{{ metric.source_file }}</code></details>
                         </div>
                     </article>
                 </div>
@@ -108,7 +109,7 @@
     <section class="my-5 yl-method-group" id="data-provenance">
         <div class="section-heading mb-3">
             <span class="section-kicker"><i class="bi bi-database-check"></i> 数据与模型版本</span>
-            <h2 class="h3">输入从哪里来，在线到底算什么</h2>
+            <h2 class="h3">数据来源与计算流程</h2>
         </div>
         <div class="row g-3">
             <div class="col-lg-6">
@@ -117,10 +118,10 @@
                         <h3 class="h5"><i class="bi bi-cloud-sun me-1"></i>天气与空气质量</h3>
                         <ul class="small text-muted mb-0">
                             <li>实时天气和 7 天预报以和风天气（QWeather）为主要来源。</li>
-                            <li>部分非核心天气读取允许 Open-Meteo 兜底；页面会标记来源、缓存和更新时间。</li>
-                            <li>公开风险、行动、照护、社区、个人评估、慢病和 ML 等生产风险链在天气不可用时停止输出结论，不用演示天气代替。</li>
-                            <li>和风 7 日预报逐日最高温、最低温、平均温或湿度缺失、NaN、无穷时，整组预报会被拒绝，不缓存也不计算风险。</li>
-                            <li>PM2.5 优先使用对应时段直接浓度。仅在首要污染物、AQI 标准版本和平均时长均明确时允许分段反算；其他情况显示空气质量未知，空气项不参与计分，其余权重重新归一。</li>
+                            <li>部分天气展示使用 Open-Meteo 备用来源；页面标明来源、缓存状态和更新时间。</li>
+                            <li>健康与照护评分使用通过来源和完整性检查的天气。天气资料不足时，结果显示“天气数据待更新”。</li>
+                            <li>7 日预报需逐日具备有效的最高温、最低温、平均温和湿度；完整性检查通过后整组进入缓存和评分。</li>
+                            <li>PM2.5 优先采用对应时段的直接浓度；AQI 反算需同时满足首要污染物为 PM2.5、标准版本兼容和平均时长明确。资料不足时标明“空气质量资料待补充”，评分按其余已知分项重新分配权重。</li>
                         </ul>
                     </div>
                 </div>
@@ -131,10 +132,14 @@
                         <h3 class="h5"><i class="bi bi-activity me-1"></i>DLNM 在线链路</h3>
                         <ul class="small text-muted mb-0">
                             <li>离线模型属于 quasi-Poisson 广义线性回归，DLNM cross-basis 表达温度的非线性和滞后效应。</li>
-                            <li>网站在线请求不会重新拟合回归；它读取 <code>final_single_model_ar1_profile.json</code> 中导出的温度–RR 曲线并插值。</li>
-                            <li>当前 profile 版本为 2026-02-11，参考温度 MMT 为 23.8°C。该曲线按累积 RR 使用，线上不会再叠加 lag 权重。</li>
-                            <li>当前研究证据状态为 exploratory，MMT 边界标记为 1。冷端 RR 1.45 与热夜 RR 1.34 只保留为未启用的研究元数据。</li>
-                            <li>当前 production profile 的单日 RR 上限为 2.6，profile 未加载时文献先验单日上限为 2.2；累计上限均为 3.5。</li>
+                            <li>默认配置读取 <code>final_single_model_ar1_profile.json</code> 中导出的温度–RR 曲线并插值。</li>
+                            <li>{% if configured_profile.status == 'available' %}
+                                配置曲线版本：{{ configured_profile.version or '待补充' }}；参考温度 MMT：{% if configured_profile.mmt is not none %}{{ configured_profile.mmt }}°C{% else %}待补充{% endif %}。
+                                该配置曲线已包含累积效应，在线按温度插值。
+                                {% elif configured_profile.status == 'disabled' %}当前配置使用本地数据与文献先验分支。
+                                {% else %}配置曲线资料待补充。{% endif %}</li>
+                            <li>MMT 边界诊断：{% if configured_profile.mmt_boundary_flag is defined and configured_profile.mmt_boundary_flag == 1 %}参考温度位于搜索边界，需复核曲线。{% elif configured_profile.mmt_boundary_flag is defined and configured_profile.mmt_boundary_flag == 0 %}参考温度位于搜索范围内。{% else %}诊断资料待补充。{% endif %}模型状态：研究评估中；冷端 RR 1.45 与热夜 RR 1.34 保存在研究资料中。</li>
+                            <li>随代码发布的默认曲线采用单日 RR 上限 2.6，文献先验分支单日上限为 2.2；累计上限均为 3.5。</li>
                             <li>模型未训练时使用 RR=1+0.015×|T−20| 的简化分支，并跳过病种与年龄修正；结果明细会标记该分支。</li>
                         </ul>
                     </div>
@@ -146,14 +151,14 @@
                         <h3 class="h5"><i class="bi bi-hospital me-1"></i>健康与社区数据</h3>
                         <ul class="small text-muted mb-0">
                             <li>历史模型数据覆盖 2023-12-13 至 2025-01-30，共 2,258 条门诊记录；60 岁以上 1,213 条。</li>
-                            <li>完整画像风险轨要求人口、老龄率、慢病率、绿地率、热岛指数、医疗可达性与基线门诊量七项同时有值；当前程序检查有限数、数值范围和 <code>uses_proxy_values</code> 标记。</li>
-                            <li>七项任一缺失、非法或标记为代理值时，该社区不计算脆弱性、天气危险度、预计就诊或行动优先级，也不进入正式排名。</li>
-                            <li><strong>来源证据状态：HOLD。</strong>现有程序尚未机器核验字段来源、单位、观测时点、社区标识或基线时间窗口；数值完整不能替代证据完整。</li>
-                            <li>Community 表为空、查询失败或没有社区通过七字段门禁时，正式画像轨不生成结果；冻结 GIS 证据通过校验时，页面可切换到独立的探索性空间筛查轨，不加载内置 8 村演示档案。</li>
-                            <li>探索性空间筛查轨与完整画像风险轨分开运行，只使用 ASPECT 65+ 占比、NASA 历史夏季晴空地表温度和 ESA 低树木覆盖三个公开 GIS 主题等权比较。</li>
-                            <li>探索性筛查中的 ASPECT 比例不是社区普查老龄率，NASA 地表温度不是当日气温或热岛指数，ESA 树木覆盖也不是绿地或树荫可达性。</li>
-                            <li>Q3 观测覆盖率只表示有效晴空观测数量，是进入筛查所需的证据质量字段，不参与得分。</li>
-                            <li>病例覆盖率只表示社区字段成功匹配比例，不代表诊断编码已完全验证。</li>
+                            <li>完整社区画像需具备人口、老龄率、慢病率、绿地率、热岛指数、医疗可达性、基线门诊量、基线统计天数八个数值字段，以及全体居民的基线人口口径。</li>
+                            <li>程序检查字段完整性、有限数、取值范围、代理值标记与基线人口和时间口径。符合要求的社区参与画像计算；其余社区显示具体资料缺项。</li>
+                            <li>外部汇总输入还核对社区名称、来源信息和审核日期格式。原始资料的真实性、统计覆盖、单位及实际观察时间，由资料审核确认。</li>
+                            <li>社区画像资料不足时，页面可展示通过校验的历史 GIS 数据，用于比较社区基础条件。两类结果各自标明数据来源与计算方式。</li>
+                            <li>社区热脆弱性对比使用三个等权主题：ASPECT 2020 年 65 岁及以上人口估计占比、NASA 2020–2024 年夏季晴空地表温度、ESA 2020 年低树木覆盖。</li>
+                            <li>这三个指标分别描述人口空间分布估计、历史地表热环境和树木覆盖类面积占比；结果为县内相对比较。</li>
+                            <li>Q3 观测覆盖率描述有效晴空观测数量，用于检查数据质量。</li>
+                            <li>病例覆盖率表示社区字段的成功匹配比例；诊断编码质量另行核查。</li>
                         </ul>
                     </div>
                 </div>
@@ -164,9 +169,9 @@
                         <h3 class="h5"><i class="bi bi-cpu me-1"></i>RandomForest 分类器</h3>
                         <ul class="small text-muted mb-0">
                             <li>模型为 13 类疾病多分类器，输入包括年龄、性别、时间和天气特征。</li>
-                            <li>RandomForest 已退出生产预测；保留的训练代码仅用于研究。</li>
-                            <li>曾展示的 65.3% 属于训练集准确率，不能代表时间外预测，也不能解释为个人未来发病概率。</li>
-                            <li>重新开放需有同结局的时间外验证、朴素基线对照及独立审核。</li>
+                            <li>当前状态：研究存档。生产预测已停用。</li>
+                            <li>已记录成绩：训练集准确率 65.3%。待完成：时间外测试、同结局基线对照和独立审核。</li>
+
                         </ul>
                     </div>
                 </div>
@@ -176,18 +181,18 @@
 
     <section class="my-5 yl-method-group" id="known-limits">
         <div class="section-heading mb-3">
-            <span class="section-kicker"><i class="bi bi-exclamation-triangle"></i> 已知局限</span>
-            <h2 class="h3">当前仍需要继续验证的地方</h2>
+            <span class="section-kicker"><i class="bi bi-exclamation-triangle"></i> 适用范围与验证计划</span>
+            <h2 class="h3">后续验证工作</h2>
         </div>
         <div class="card shadow-sm">
             <div class="card-body p-4">
                 <ul class="mb-0 text-muted">
-                    <li>当前 production RR profile 的残差仍存在自相关，应该继续做按时间切分的回测与校准。</li>
-                    <li>仓库内可复现的 v1 DLNM 报告把 MMT 标记为搜索边界值，不应直接替换线上 profile。</li>
-                    <li>社区原始脆弱性字段存在 0–1 与 0–100 单位混用警告，绿地、热岛、慢病率和医疗可达性仍需更可靠的实测数据。</li>
-                    <li>个人、慢病和 7 天评分包含人工设定的可审计权重；这些权重用于行动筛查，尚未完成临床校准。个人概率、门诊高负荷概率及其模型预警与 Likelihood 矩阵因此停用；官方天气预警保持独立。</li>
-                    <li>慢病评分只在慢病层应用一次个体年龄放大；该年龄规则仍需真实试点数据校准。</li>
-                    <li>数据缺失、代理值、模型回退或天气 API 不可用时，页面必须显示状态，不能把默认值包装成真实观测。</li>
+                    <li>温度–RR 曲线：完成按时间切分的回测、残差自相关检查与校准。</li>
+                    <li>研究版 v1 DLNM 曲线：复核报告中的 MMT 搜索边界问题，再评估版本替换。</li>
+                    <li>社区资料：统一比例单位，补充绿地、热岛、慢病率和医疗可达性的实测记录。</li>
+                    <li>照护与天气关注分：核验人工规则权重与实际结果的关系。个人患病概率、门诊高负荷概率及相关模型预警的启用条件为相应结局的时间外验证与概率校准；当前状态为停用。官方天气预警独立展示。</li>
+                    <li>慢病评分：年龄放大规则在慢病层应用一次，下一步使用真实试点数据校准。</li>
+                    <li>数据状态：结果同时标明缺失项、插补方法、模型分支及天气更新时间。</li>
                 </ul>
             </div>
         </div>
@@ -195,19 +200,19 @@
 
     <section class="my-5 yl-method-group" id="privacy">
         <div class="section-heading mb-3">
-            <span class="section-kicker"><i class="bi bi-lock"></i> 隐私与使用边界</span>
+            <span class="section-kicker"><i class="bi bi-lock"></i> 隐私与资料管理</span>
             <h2 class="h3">系统会保存什么</h2>
         </div>
         <div class="card shadow-sm">
             <div class="card-body p-4">
                 <ul class="mb-0 text-muted">
                     <li>注册与照护功能会在账号权限范围内保存用户名、家庭成员档案、健康字段、评估记录和行动记录。</li>
-                    <li>短码和行动令牌使用哈希与有效期保护；公开页面不应暴露原始健康档案。</li>
-                    <li>个人阈值拨片只保存在当前浏览器，不上传服务器。</li>
-                    <li>历史建模输出应使用去标识或聚合数据；原始病历字段不进入公开页面和公开报告。</li>
+                    <li>短码和行动令牌使用哈希与有效期保护；健康档案在对应账号权限范围内访问。</li>
+                    <li>个人阈值拨片保存在当前浏览器。</li>
+                    <li>公开的历史建模报告使用去标识或聚合数据。</li>
                     <li>微信小程序不使用第三方生成式 AI，也不会把老人档案、健康记录或自由文本发送给 AI 服务。</li>
                     <li>Web 正式入口的 AI 问答当前关闭；如未来启用，会在发送前单独说明处理方、数据用途、保存期限并取得明确同意。</li>
-                    <li>“分享给医生/社区”的字段不等同于完整授权体系，真实医生试点前仍需补充角色、授权、审计和数据最小化。</li>
+                    <li>医生试点的准备工作包括角色权限、共享授权、审计和必要字段范围。</li>
                 </ul>
             </div>
         </div>

@@ -8,7 +8,7 @@
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-calendar-week"></i> 7 天天气与健康关注</span>
         <h2>接下来一周，哪几天天气需要留意？</h2>
-        <p>页面先展示逐日天气。只有来源、时效和字段都通过健康模型门禁时，才会显示地区级暴露关注分；缺失项保留未知，情景区间尚未通过覆盖率验证。它不使用个人慢病资料，也不是官方天气预警。</p>
+        <p>查看逐日天气，用天气关注分比较本周的防护需求。关注分按气温、热夜、湿度和 PM2.5 规则计算，分数越高越值得提前准备。</p>
     </section>
 
     <form method="GET" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
@@ -19,7 +19,7 @@
                 <datalist id="locOpts">{% for loc in (location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
             </div>
             <div class="col-md-4 d-grid">
-                <button class="btn btn-primary" type="submit"><i class="bi bi-graph-up me-1"></i>生成预测</button>
+                <button class="btn btn-primary" type="submit"><i class="bi bi-graph-up me-1"></i>查看预报</button>
             </div>
         </div>
     </form>
@@ -32,28 +32,44 @@
         </div>
     </div>
 
-    {% if forecast_error %}
-    <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="alert">
-        <i class="bi bi-exclamation-triangle me-1"></i>7 天天气正在更新，预报暂不显示。请稍后重试。
-    </div>
-    {% endif %}
-
     {# 7 天横向卡 #}
     {% if forecast_days %}
-    <div class="alert alert-light border yl-fade-up yl-fade-up-d2" role="note">
-        门诊高负荷概率与模型预警尚未完成校准，当前不启用。这里的逐日天气卡继续显示；官方天气预警仍由独立预警链展示。
-    </div>
+    {% set week = namespace(pm_missing=0, scored=0, high=0) %}
+    {% for d in forecast_days %}
+        {% if d.pm25_used is none %}{% set week.pm_missing = week.pm_missing + 1 %}{% endif %}
+        {% if d.risk_available %}
+            {% set week.scored = week.scored + 1 %}
+            {% if d.risk_score >= 70 %}{% set week.high = week.high + 1 %}{% endif %}
+        {% endif %}
+    {% endfor %}
+    {% if week.pm_missing == forecast_days|length %}
+    <p class="small text-muted mb-3" role="note">本周 PM2.5 预报缺失。{% if week.scored %}天气关注分按其余可用分项计算。{% endif %}</p>
+    {% endif %}
     <div class="row g-3 mb-4 yl-fade-up yl-fade-up-d2">
         {% for d in forecast_days %}
-        <div class="col">
+        <div class="col-6 col-md-4 col-lg-3">
             <div class="card h-100 text-center day" data-risk="attention">
                 <div class="card-body p-3">
                     <div class="text-muted" style="font-size:.82rem;">{{ d.date }}</div>
                     <div class="fw-semibold mt-1">{{ d.dow }}</div>
                     <div class="my-2" style="font-size:1.8rem; color:var(--yl-orange-500);"><i class="bi bi-cloud-sun"></i></div>
-                    <div style="font-size:1rem; font-weight:600;">{{ d.temp_high }}° / {{ d.temp_low }}°</div>
+                    <div style="font-size:1rem; font-weight:600;">{{ (d.temp_high|string) ~ '°' if d.temp_high is not none else '未知' }} / {{ (d.temp_low|string) ~ '°' if d.temp_low is not none else '未知' }}</div>
                     <div class="text-muted" style="font-size:.78rem;">{{ d.condition }}</div>
                     <div class="mt-2">
+                        <span class="badge risk-badge text-bg-light text-wrap">
+                            {% if d.risk_available %}天气关注分 {{ d.risk_score }}{% else %}天气关注分未知{% endif %}
+                        </span>
+                        <div class="small text-muted">规则评分{% if d.risk_available %} · {{ d.risk_label }}{% endif %}</div>
+                        {% if d.temp_high is none or d.temp_low is none or 'heat' in d.unknown_components %}<div class="small text-muted">温度资料缺失</div>{% endif %}
+                        {% if d.pm25_used is none and week.pm_missing < forecast_days|length %}<div class="small text-muted">本日 PM2.5 预报缺失</div>{% endif %}
+                        {% if 'humidity' in d.unknown_components %}<div class="small text-muted">湿度资料缺失</div>{% endif %}
+                        {% if 'hot_night' in d.unknown_components %}<div class="small text-muted">夜间温度资料缺失</div>{% endif %}
+                        {% if not d.risk_available and d.temp_high is not none and d.temp_low is not none and 'heat' not in d.unknown_components %}<div class="small text-muted">评分资料待补充</div>{% endif %}
+                    </div>
+                    {% if d.risk_available or d.predictability_score is not none %}
+                    <details class="mt-3 small text-start" style="overflow-wrap:anywhere;">
+                        <summary>结果依据</summary>
+                        <div class="text-muted mt-2" style="line-height:1.6;">
                         {% set forecast_context = {
                             '限幅前评分': d.composite_pre_clip_score if d.composite_pre_clip_score is not none else '--',
                             '最终评分': d.composite_final_score if d.composite_final_score is not none else '--',
@@ -68,33 +84,10 @@
                             '湿度实际使用': ((d.humidity_used|string) ~ '%' ~ ('（插补）' if d.humidity_imputed else '（直接）')) if d.humidity_used is not none else '--',
                             '夜间最低温实际使用': ((d.temp_min_used|string) ~ '°C' ~ ('（插补）' if d.temp_min_imputed else '（直接）')) if d.temp_min_used is not none else '--'
                         } %}
-                        <span class="badge risk-badge text-bg-light"
-                              data-detail="温度 {{ d.temp_high }}°/{{ d.temp_low }}° · {{ d.condition }}">
-                            {% if d.risk_available %}关注分 {{ d.risk_score }}{% else %}健康关注分待计算{% endif %}
-                        </span>
-                        {{ metric_info('forecast_exposure_score', forecast_context) }}
-                        {% if d.pm25_source == 'unknown' %}<div class="small text-muted">空气质量未知，未计入评分</div>{% endif %}
-                        {% if d.exposure_status == 'partial' %}<div class="small text-muted">部分资料缺失 · 按已知分项归一</div>{% endif %}
-                    </div>
-                    {% if d.probability_high_visits is not none or d.predictability_score is not none %}
-                    <div class="text-muted mt-2" style="font-size:.72rem; line-height:1.45;">
-                        {% if d.visit_point_estimate is none and d.predictability_score is not none %}<div>就诊负荷未知：预测资料不足</div>{% endif %}
-                        {% if d.probability_high_visits is not none %}
-                            {% set visit_context = {
-                                '本日概率': (d.probability_high_visits|round(1)|string) ~ '%',
-                                '概率所用原始门诊量': d.visit_raw_point_estimate if d.visit_raw_point_estimate is not none else '--',
-                                '页面门诊量': d.visit_point_estimate if d.visit_point_estimate is not none else '--',
-                                '温度RR': d.visit_rr if d.visit_rr is not none else '--',
-                                '季节基线': d.visit_baseline if d.visit_baseline is not none else '--',
-                                '星期系数': d.visit_dow_factor if d.visit_dow_factor is not none else '--',
-                                '历史P90阈值': d.visit_threshold_p90 if d.visit_threshold_p90 is not none else '--',
-                                '概率标准差': d.visit_std_estimate if d.visit_std_estimate is not none else '--',
-                                '概率路径': ('正态近似' if d.visit_probability_method == 'normal_approximation' else '10%回退' if d.visit_probability_method == 'fallback_0.1' else '--'),
-                                '页面限幅': ('是，上限 ' ~ (d.visit_guardrail_cap|string) if d.visit_guardrail_applied else '否' if d.visit_guardrail_applied is not none else '--')
-                            } %}
-                            就诊负担升高 {{ d.probability_high_visits|round(1) }}% {{ metric_info('forecast_visit_probability', visit_context) }}
-                        {% endif %}
-                        {% if d.predictability_score is not none %}
+                            <div>天气关注分：地区天气的规则评分 {{ metric_info('forecast_exposure_score', forecast_context) }}</div>
+                            {% if d.risk_available %}<div>已用分项：{% for key, name in [('heat', '气温'), ('hot_night', '热夜'), ('humidity', '湿度'), ('pm25', 'PM2.5')] %}{% if d.risk_components[key] is not none %}{{ name }} {{ d.risk_components[key] }}{% if not loop.last %}；{% endif %}{% endif %}{% endfor %}</div>{% endif %}
+                            {% if d.exposure_status == 'partial' %}<div>缺失分项留空，其余分项权重按比例调整。</div>{% endif %}
+                            {% if d.predictability_score is not none %}
                             {% set predictability_context = {
                                 '本日评分': d.predictability_score|round(1),
                                 '等级': d.predictability_label or '--',
@@ -106,11 +99,20 @@
                                 '模型数量': d.predictability_model_count if d.predictability_model_count is not none else '--',
                                 '提前期惩罚': d.predictability_lead_penalty if d.predictability_lead_penalty is not none else '--'
                             } %}
-                            <br>可预报性参考分 {{ d.predictability_score|round(0) }}{% if d.predictability_branch == 'lead_only' %} · 无多模型信息{% endif %}<br>启发式评分，非实测准确率 {{ metric_info('forecast_predictability', predictability_context) }}
-                        {% endif %}
-                    </div>
+                            <div class="mt-2">预报参考分（规则计算）：{{ d.predictability_score|round(1) }} {{ metric_info('forecast_predictability', predictability_context) }}</div>
+                            {% if d.predictability_branch == 'external' %}
+                            <div>采用上游提供的参考分；具体算法和校准情况待核实。</div>
+                            {% elif d.predictability_branch == 'lead_only' %}
+                            <div>按提前天数计算，最高 60 分；多模型温差信息缺失。</div>
+                            {% elif d.predictability_branch == 'derived' %}
+                            <div>按多模型温差与提前天数计算。</div>
+                            {% endif %}
+                            <div>{% if d.predictability_lead_day is not none %}提前 {{ d.predictability_lead_day }} 天{% endif %}{% if d.predictability_model_spread is not none %} · 模型温差 {{ d.predictability_model_spread }}°C{% endif %}</div>
+                            <div>分数与实际预报误差的对应关系待验证。</div>
+                            {% endif %}
+                        </div>
+                    </details>
                     {% endif %}
-                    <div class="why-tip">暴露关注 {{ d.risk_score if d.risk_available else '待计算' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
                 </div>
             </div>
         </div>
@@ -124,51 +126,42 @@
     </section>
     {% endif %}
 
+    {% if forecast_days and week.scored %}
     <div class="row g-4 mb-4">
-        <div class="col-lg-8">
+        <div class="{{ 'col-lg-8' if week.high else 'col-12' }}">
             <section class="yl-section yl-fade-up yl-fade-up-d3">
-                <h4 style="font-size:1.1rem;">暴露关注走势 {{ metric_info('forecast_exposure_score') }}</h4>
+                <h4 style="font-size:1.1rem;">天气关注分走势 <small class="text-muted">规则评分</small> {{ metric_info('forecast_exposure_score') }}</h4>
+                {% if week.scored < forecast_days|length %}<p class="small text-muted">资料缺失的日期在图中留空。</p>{% endif %}
                 <canvas id="forecastChart" height="260" class="mt-3"></canvas>
             </section>
         </div>
+        {% if week.high %}
         <div class="col-lg-4">
             <section class="yl-section h-100 yl-fade-up yl-fade-up-d3">
-                <h4 style="font-size:1.1rem;">本周高暴露关注日</h4>
-                <p class="text-muted" style="font-size:.9rem;">以下日期行动关注分 ≥ 70，建议提前核对官方预警并准备防护。</p>
+                <h4 style="font-size:1.1rem;">本周重点关注日</h4>
+                <p class="text-muted" style="font-size:.9rem;">天气关注分达到 70 的日期，建议提前查看官方预警、准备防护。</p>
                 <ul class="list-unstyled mt-3 mb-0">
-                    {% set high_risk_count = namespace(value=0) %}
-                    {% set unknown_risk_count = namespace(value=0) %}
                     {% for d in forecast_days %}
-                        {% if not d.risk_available %}
-                        {% set unknown_risk_count.value = unknown_risk_count.value + 1 %}
-                        {% elif (d.risk_score or 0) >= 70 %}
-                        {% set high_risk_count.value = high_risk_count.value + 1 %}
+                        {% if d.risk_available and d.risk_score >= 70 %}
                         <li class="d-flex justify-content-between py-2 border-bottom">
                             <span><strong>{{ d.date }}</strong> · {{ d.condition }}</span>
                             <span class="badge bg-danger-subtle">{{ d.risk_score }}</span>
                         </li>
                         {% endif %}
                     {% endfor %}
-                    {% if unknown_risk_count.value == forecast_days|length %}
-                    <li class="text-muted py-2">暴露关注趋势正在更新。</li>
-                    {% elif high_risk_count.value == 0 %}
-                    <li class="text-muted py-2">本周暂无高暴露关注日。</li>
-                    {% endif %}
                 </ul>
             </section>
         </div>
+        {% endif %}
     </div>
+    {% endif %}
 
     {# 建议 #}
+    {% if forecast_days and weekly_tips %}
     <section class="yl-section yl-fade-up">
         <h4 style="font-size:1.1rem;"><i class="bi bi-lightbulb text-warning me-1"></i>本周建议</h4>
         <div class="row g-3 mt-1">
-            {% for tip in (weekly_tips or [
-                {'icon':'sun','title':'避开午后外出','detail':'11:00–15:00 紫外线最强,尽量安排室内活动。'},
-                {'icon':'cup-hot','title':'补水 1.5L+','detail':'少量多次,别等口渴才喝。'},
-                {'icon':'heart-pulse','title':'早晚测血压','detail':'高温天血压波动大,发现异常及时就医。'},
-                {'icon':'capsule','title':'带好常用药','detail':'外出时别忘了慢病药和急救药。'}
-            ]) %}
+            {% for tip in weekly_tips %}
             <div class="col-md-6 col-lg-3">
                 <div class="yl-action h-100">
                     <i class="bi bi-{{ tip.icon }}"></i>
@@ -178,6 +171,7 @@
             {% endfor %}
         </div>
     </section>
+    {% endif %}
 </div>
 
 <script>
@@ -191,14 +185,14 @@ document.addEventListener('DOMContentLoaded', function() {
     new Chart(ctx, {
         type: 'line',
         data: { labels, datasets: [
-            { label: '暴露关注分', data: scores, borderColor:'#EE7E2D', backgroundColor:'rgba(238,126,45,0.12)', fill:true, tension:0.4, yAxisID:'y' },
+            { label: '天气关注分（规则评分）', data: scores, borderColor:'#EE7E2D', backgroundColor:'rgba(238,126,45,0.12)', fill:true, tension:0.4, yAxisID:'y' },
             { label: '最高气温', data: highs, borderColor:'#C7472E', borderDash:[4,4], tension:0.4, yAxisID:'y1' }
         ]},
         options: {
             responsive: true,
             interaction: { mode:'index', intersect:false },
             scales: {
-                y: { beginAtZero:true, max:100, title:{display:true,text:'暴露关注分'}, grid:{color:'#F4EDDF'} },
+                y: { beginAtZero:true, max:100, title:{display:true,text:'天气关注分'}, grid:{color:'#F4EDDF'} },
                 y1:{ position:'right', suggestedMin:0, suggestedMax:45, grid:{display:false}, title:{display:true,text:'气温 °C'} }
             }
         }

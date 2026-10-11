@@ -70,9 +70,9 @@ def test_sensitivity_reports_both_weight_directions_and_synthetic_boundary():
 def test_static_gis_explicitly_disallows_realtime_weather(authenticated_client):
     html = authenticated_client.get("/heat-exposure-gis?ui=legacy").get_data(as_text=True)
     assert "结构脆弱性 GIS" in html
-    assert "2020 年底数" in html
-    assert "2020–2024 年历史夏季观测，不叠加实时天气" in html
-    assert "实时风险只在县级展示" in html
+    assert "人口：ASPECT 2020 年估计" in html
+    assert "夏季晴空地表温度：2020–2024 年" in html
+    assert "实时天气可在县级天气页查看" in html
     root = Path(__file__).resolve().parents[1]
     metadata = json.loads((root / "data/gis/duchang_heat_exposure_cells.geojson").read_text())["metadata"]
     assert metadata["study_period"]["end"].startswith("2024")

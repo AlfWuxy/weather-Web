@@ -17,7 +17,7 @@ def test_missing_multimodel_information_caps_local_score(forecast, spread, count
     assert result['score'] == 60
     assert result['branch'] == 'lead_only'
     assert result['inputs']['model_spread'] is None
-    assert '无多模型信息' in result['note']
+    assert '多模型温差信息缺失' in result['note']
     assert forecast._calculate_predictability(7, spread, count)['score'] == 42
 
 
@@ -241,7 +241,8 @@ def test_forecast_page_renders_unknown_visit_predictions(authenticated_client, m
     response = authenticated_client.get('/forecast-7day')
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '就诊负荷未知：预测资料不足' in body
-    assert '空气质量未知，未计入评分' in body
-    assert '无多模型信息' in body
+    assert '就诊负荷未知' not in body
+    assert body.count('本周 PM2.5 预报缺失。') == 1
+    assert '预报参考分（规则计算）' in body
+    assert '多模型温差信息缺失' in body
     assert '预计正常' not in body

@@ -245,15 +245,15 @@
                 <span class="cr-chip"><i class="bi bi-clock-history"></i> 历史健康负担 {{ metric_info('sir') }}</span>
             </div>
             <div class="d-flex flex-wrap gap-2 d-none" data-screening-only hidden>
-                <span class="cr-chip"><i class="bi bi-bar-chart-steps"></i> 相对筛查得分 {{ metric_info('community_screening_score') }}</span>
-                <span class="cr-chip"><i class="bi bi-people"></i> ASPECT 65+ 占比 {{ metric_info('gis_age65_share') }}</span>
-                <span class="cr-chip"><i class="bi bi-thermometer-sun"></i> NASA 历史夏季 LST {{ metric_info('gis_lst_mean') }}</span>
-                <span class="cr-chip"><i class="bi bi-tree"></i> ESA 树木覆盖 {{ metric_info('gis_tree_cover') }}</span>
+                <span class="cr-chip"><i class="bi bi-bar-chart-steps"></i> 热脆弱性对比分 {{ metric_info('community_screening_score') }}</span>
+                <span class="cr-chip"><i class="bi bi-people"></i> 65 岁及以上人口估计占比 {{ metric_info('gis_age65_share') }}</span>
+                <span class="cr-chip"><i class="bi bi-thermometer-sun"></i> 夏季晴空地表温度 {{ metric_info('gis_lst_mean') }}</span>
+                <span class="cr-chip"><i class="bi bi-tree"></i> 树木覆盖类面积占比 {{ metric_info('gis_tree_cover') }}</span>
             </div>
         </div>
     </div>
 
-    <div class="alert alert-info" role="note">空间图用于结构脆弱性筛查：人口与覆盖底数为 2020 年，历史地表温度为 2020–2024 年；不是网格实时健康风险。实时天气风险仅在县级解释。风险排名采用每千居民每日超额就诊率（不是老人分母），预计额外人次/日只用于资源配置。风险分与资料置信度分别展示，低置信度不会降低风险分。</div>
+    <div class="alert alert-info d-none" data-clinical-only hidden role="note">排名中的天气危险度采用每千居民每日超额就诊率；预计额外人次/日用于估计资源需求。风险分与资料置信度分别展示，低置信度不会降低风险分。实时天气在县级解释。</div>
 
     {% if community_data_redacted %}
     <div class="alert alert-info" role="status">
@@ -373,19 +373,19 @@
 
             <div class="card cr-card mb-3 d-none" data-screening-only hidden>
                 <div class="card-header">
-                    <h6 class="mb-0"><i class="bi bi-bar-chart"></i> 探索性筛查摘要</h6>
+                    <h6 class="mb-0"><i class="bi bi-bar-chart"></i> 社区对比概览</h6>
                 </div>
                 <div class="card-body">
                     <div class="cr-kpi-grid">
                         <div class="cr-kpi">
-                            <div class="name">已筛查社区</div>
+                            <div class="name">已参与对比社区</div>
                             <div class="value" id="kpiScreeningCommunities">--</div>
                             <div class="sub">完成评分 / 候选社区</div>
                         </div>
                         <div class="cr-kpi">
-                            <div class="name">最高筛查得分 {{ metric_info('community_screening_score') }}</div>
+                            <div class="name">最高对比分 {{ metric_info('community_screening_score') }}</div>
                             <div class="value" id="kpiScreeningMaxScore">--</div>
-                            <div class="sub">相对脆弱性 0–100</div>
+                            <div class="sub">县内相对比较 · 0–100</div>
                         </div>
                         <div class="cr-kpi">
                             <div class="name">GIS 单元 {{ metric_info('gis_native_grid') }}</div>
@@ -393,60 +393,62 @@
                             <div class="sub">已匹配的独立空间单元</div>
                         </div>
                         <div class="cr-kpi">
-                            <div class="name">Q3 观测覆盖 {{ metric_info('gis_q3_coverage') }}</div>
+                            <div class="name">有效观测覆盖 {{ metric_info('gis_q3_coverage') }}</div>
                             <div class="value" id="kpiScreeningCoverage">--</div>
-                            <div class="sub">社区中位数，仅表示证据质量</div>
+                            <div class="sub">社区中位数 · 数据质量</div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div class="card cr-card mb-3 d-none" data-screening-only hidden>
-                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                    <h3 class="h6 mb-0"><i class="bi bi-info-circle"></i> 这些指标怎么读</h3>
-                    <span class="text-muted small">点击每项旁的说明按钮可查看公式、时间范围和缺失处理</span>
-                </div>
+            <details class="card cr-card mb-3 d-none" data-screening-only hidden>
+                <summary class="card-header"><i class="bi bi-info-circle"></i> 结果依据：指标、公式与空间尺度</summary>
                 <div class="card-body">
                     <div class="cr-metric-explainer-grid">
                         <div class="cr-metric-explainer">
-                            <h4 class="label">相对脆弱性筛查得分 {{ metric_info('community_screening_score') }}</h4>
-                            <p>三个主题在当前证据完整社区中分别转成相对分位，再按各 1/3 等权合成。</p>
-                            <div class="cr-metric-direction"><strong>怎么读：</strong>分数越高，只表示后续核查顺序越靠前，不代表个人健康风险或当日预警等级。</div>
+                            <h4 class="label">热脆弱性对比分 {{ metric_info('community_screening_score') }}</h4>
+                            <p>三个主题在当前资料完整社区中分别转成相对分位，再按各 1/3 等权合成。</p>
+                            <div class="cr-metric-direction"><strong>怎么读：</strong>分数越高，所比较的基础条件越值得优先实地核查。</div>
                         </div>
                         <div class="cr-metric-explainer">
-                            <h4 class="label">ASPECT 65+ 占比 {{ metric_info('gis_age65_share') }}</h4>
-                            <p>ASPECT 2020 年模型化年龄结构人口中，65 岁及以上人口占模型化总人口的比例。</p>
-                            <div class="cr-metric-direction"><strong>入分方向：</strong>比例越高，年龄敏感性分位越高；它不等同于社区普查老龄率。</div>
+                            <h4 class="label">65 岁及以上人口估计占比 {{ metric_info('gis_age65_share') }}</h4>
+                            <p>ASPECT 基于 2020 年人口资料估计各网格的年龄分布；此项为 65 岁及以上人口估计占总人口估计的比例。</p>
+                            <div class="cr-metric-direction"><strong>入分方向：</strong>比例越高，老龄人口主题的相对分位越高。</div>
                         </div>
                         <div class="cr-metric-explainer">
-                            <h4 class="label">NASA 历史夏季 LST {{ metric_info('gis_lst_mean') }}</h4>
-                            <p>2020–2024 年每年 6–8 月，Aqua 白天 Q3 晴空地表温度的多年均值。</p>
-                            <div class="cr-metric-direction"><strong>入分方向：</strong>温度越高，历史地表热暴露分位越高；它不是当前气温、室内温度或人体体感。</div>
+                            <h4 class="label">夏季晴空地表温度 {{ metric_info('gis_lst_mean') }}</h4>
+                            <p>2020–2024 年每年 6–8 月，Aqua MODIS 白天晴空地表温度的多年均值，采用 Q3 质量筛选。</p>
+                            <div class="cr-metric-direction"><strong>入分方向：</strong>历史夏季晴空地表温度越高，地表热环境主题的相对分位越高。</div>
                         </div>
                         <div class="cr-metric-explainer">
-                            <h4 class="label">ESA 树木覆盖 {{ metric_info('gis_tree_cover') }}</h4>
-                            <p>ESA WorldCover 2020 v100 的树木覆盖类别，按有效源像元覆盖权重聚合到 MODIS 网格。</p>
-                            <div class="cr-metric-direction"><strong>入分方向：</strong>实际使用 100−树木覆盖率，覆盖越低，植被缺口分位越高；它不表示公园或树荫可达性。</div>
+                            <h4 class="label">树木覆盖类面积占比 {{ metric_info('gis_tree_cover') }}</h4>
+                            <p>ESA WorldCover 2020 v100 的树木覆盖类面积占比，按有效源像元覆盖权重汇总到 MODIS 网格。</p>
+                            <div class="cr-metric-direction"><strong>入分方向：</strong>使用 100−树木覆盖类面积占比；覆盖越低，该主题的相对分位越高。</div>
                         </div>
                         <div class="cr-metric-explainer">
-                            <h4 class="label">Q3 观测覆盖 {{ metric_info('gis_q3_coverage') }}</h4>
-                            <p>448 个冻结夏季场景中，通过 Q3 质量筛选的网格日比例，用来显示云遮和有效观测稀疏程度。</p>
-                            <div class="cr-metric-direction"><strong>评分作用：</strong>它是进入筛查所需的证据质量字段，只展示、不计分。</div>
+                            <h4 class="label">有效观测覆盖 {{ metric_info('gis_q3_coverage') }}</h4>
+                            <p>448 个存档夏季场景中，通过 Q3 质量筛选的网格日比例；覆盖率越低，可用于比较的观测越少。</p>
+                            <div class="cr-metric-direction"><strong>评分作用：</strong>参与对比需具备此项数据；覆盖率用于判断数据质量，不计入对比分。</div>
                         </div>
                         <div class="cr-metric-explainer">
                             <h4 class="label">GIS 单元 {{ metric_info('gis_native_grid') }}</h4>
-                            <p>社区配置点通过 point-in-polygon 匹配到约 926.6 米边长的原生 MODIS 网格，不使用最近网格兜底。</p>
-                            <div class="cr-metric-direction"><strong>怎么读：</strong>共享同一网格的社区会共享三个原始指标、筛查得分和并列名次。</div>
+                            <p>按社区配置点所在位置匹配原生 MODIS 网格，网格边长约 926.6 米；点位未落入有效网格时，显示资料不足。</p>
+                            <div class="cr-metric-direction"><strong>怎么读：</strong>同一网格内的社区使用相同的三个原始指标，对比分相同、名次并列。</div>
                         </div>
                     </div>
                 </div>
-            </div>
+            </details>
 
             <div class="card cr-card mb-3">
                 <div class="card-header">
                     <h6 class="mb-0"><i class="bi bi-palette"></i> 图层图例</h6>
                 </div>
                 <div class="card-body" id="layerLegend"></div>
+                <div class="px-3 pb-3 small text-muted d-none" data-screening-only hidden>
+                    <strong>历史数据 · 县内相对比较</strong><br>
+                    人口：ASPECT 2020 年估计；树木覆盖类面积占比：ESA 2020 年。<br>
+                    夏季晴空地表温度：2020–2024 年白天观测。有效观测覆盖表示数据质量；灰色为资料不足。
+                </div>
             </div>
 
             <div class="card cr-card mb-3">
@@ -594,7 +596,7 @@
 
     <div class="card cr-card mb-3 d-none" data-screening-only hidden>
         <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <h6 class="mb-0"><i class="bi bi-table"></i> 探索性筛查证据明细</h6>
+            <h6 class="mb-0"><i class="bi bi-table"></i> 社区数据明细</h6>
             <span class="text-muted small">同分使用并列名次；点击行可定位地图</span>
         </div>
         <div class="card-body">
@@ -602,14 +604,14 @@
                 <table class="table cr-table" aria-describedby="screeningEvidenceNote">
                     <thead>
                         <tr>
-                            <th>筛查名次</th>
+                            <th>对比排序</th>
                             <th>社区</th>
-                            <th>相对脆弱性筛查得分 {{ metric_info('community_screening_score') }}</th>
+                            <th>热脆弱性对比分 {{ metric_info('community_screening_score') }}</th>
                             <th>GIS 单元 {{ metric_info('gis_native_grid') }}</th>
-                            <th>ASPECT 65+ 占比 {{ metric_info('gis_age65_share') }}</th>
-                            <th>NASA 历史夏季 LST {{ metric_info('gis_lst_mean') }}</th>
-                            <th>ESA 树木覆盖 {{ metric_info('gis_tree_cover') }}</th>
-                            <th>Q3 观测覆盖 {{ metric_info('gis_q3_coverage') }}</th>
+                            <th>65 岁及以上人口估计占比 {{ metric_info('gis_age65_share') }}</th>
+                            <th>夏季晴空地表温度 {{ metric_info('gis_lst_mean') }}</th>
+                            <th>树木覆盖类面积占比 {{ metric_info('gis_tree_cover') }}</th>
+                            <th>有效观测覆盖 {{ metric_info('gis_q3_coverage') }}</th>
                             <th>状态 / 原因</th>
                         </tr>
                     </thead>
@@ -619,7 +621,7 @@
                 </table>
             </div>
             <p class="text-muted small mt-2 mb-0" id="screeningEvidenceNote">
-                筛查得分由老龄人口、历史地表热暴露与低树木覆盖三个主题等权合成。Q3 覆盖率仅作证据质量展示，不进入评分。省略的临床字段不进入评分。
+                对比分由老龄人口估计占比、夏季晴空地表温度与低树木覆盖三个主题的相对分位等权合成。灰色行资料不足；同分并列。
             </p>
         </div>
     </div>
@@ -893,7 +895,7 @@ function applyRankingMode(mode) {
     if (refreshButton) refreshButton.disabled = false;
     if (riskIndexOption) {
         riskIndexOption.textContent = screening
-            ? '相对脆弱性筛查得分（0–100）'
+            ? '热脆弱性对比分（0–100）'
             : '综合风险（0-100）';
     }
     if (screening && layerSelectElement) {
@@ -903,14 +905,14 @@ function applyRankingMode(mode) {
     const subtitle = document.getElementById('communityRiskPageSubtitle');
     const refreshLabel = document.getElementById('refreshRiskMapLabel');
     if (screening) {
-        setIconHeading('communityRiskPageTitle', 'bi bi-map', '探索性社区空间筛查');
-        setIconHeading('communityMapHeading', 'bi bi-geo-alt', '探索性相对脆弱性地图');
-        setIconHeading('communityRankingHeading', 'bi bi-list-ol', '探索性筛查优先序');
-        setIconHeading('methodologySummary', 'bi bi-journal-text', '查看筛查方法与边界');
+        setIconHeading('communityRiskPageTitle', 'bi bi-map', '社区热脆弱性对比');
+        setIconHeading('communityMapHeading', 'bi bi-geo-alt', '社区热脆弱性地图');
+        setIconHeading('communityRankingHeading', 'bi bi-list-ol', '实地核查参考顺序');
+        setIconHeading('methodologySummary', 'bi bi-journal-text', '查看计算方法与数据来源');
         if (subtitle) {
-            subtitle.textContent = '基于开放地理证据比较社区的相对脆弱性，用于后续核查与数据收集排序。';
+            subtitle.textContent = '结合老龄人口分布、历史地表热环境与树木覆盖，比较社区基础条件，安排实地核查。';
         }
-        if (refreshLabel) refreshLabel.textContent = '刷新探索性筛查';
+        if (refreshLabel) refreshLabel.textContent = '刷新社区对比';
     } else {
         setIconHeading('communityRiskPageTitle', 'bi bi-map', '社区风险与行动地图');
         setIconHeading('communityMapHeading', 'bi bi-geo-alt', '风险分布地图');
@@ -1144,14 +1146,14 @@ function getLayerStyle(row, layerKey) {
     if (isScreeningMode()) {
         const score = screeningScore(row);
         if (!rowIsRanked(row)) {
-            return { color: '#94a3b8', label: '未进入筛查', valueText: '--' };
+            return { color: '#94a3b8', label: '资料不足，未参与对比', valueText: '--' };
         }
         const level = safeText(row && row.screening_level, '');
         const band = screeningBandsFromMetadata().find(item => item.level === level);
         const fallbackColor = band ? band.color : '#2563eb';
         return {
             color: screeningColor(row, fallbackColor),
-            label: safeText(row && row.screening_label, level || '相对脆弱性筛查'),
+            label: safeText(row && row.screening_label, level || '热脆弱性对比'),
             valueText: formatNumber(score, 1)
         };
     }
@@ -1244,7 +1246,7 @@ function renderLayerLegend(layerKey) {
                 color: band.color,
                 text: screeningBandLegendText(band)
             }));
-        items.push({ color: '#94a3b8', text: '灰色：筛查证据不足' });
+        items.push({ color: '#94a3b8', text: '灰色：资料不足，未参与对比' });
     } else if (layerKey === 'vulnerability') {
         items = [
             { color: '#1e3a8a', text: '>=80：脆弱性极高' },
@@ -1301,7 +1303,7 @@ function buildInfoWindowHtml(row, style) {
             return [
                 '<div class="cr-info-window" style="width:min(320px,calc(100vw - 72px));max-width:320px;padding:10px;">',
                 `<div style="font-weight:700;color:#64748b;margin-bottom:8px;">${escapeHtml(row.community || '--')}</div>`,
-                '<div style="font-size:12px;font-weight:700;color:#64748b;margin-bottom:6px;">未进入筛查</div>',
+                '<div style="font-size:12px;font-weight:700;color:#64748b;margin-bottom:6px;">资料不足，未参与对比</div>',
                 `<div style="font-size:12px;color:#475569;">${escapeHtml(screeningExclusionReason(row))}</div>`,
                 '</div>'
             ].join('');
@@ -1315,14 +1317,14 @@ function buildInfoWindowHtml(row, style) {
         return [
             '<div class="cr-info-window" style="width:min(320px,calc(100vw - 72px));max-width:320px;padding:10px;">',
             `<div style="font-weight:700;color:${style.color};margin-bottom:8px;">${escapeHtml(row.community || '--')}</div>`,
-            `<div style="font-size:12px;margin-bottom:4px;">筛查名次：<strong>${escapeHtml(screeningRankLabel(row))}</strong></div>`,
-            `<div style="font-size:12px;margin-bottom:4px;">相对脆弱性筛查得分：<strong>${escapeHtml(formatNumber(screeningScore(row), 1))}</strong></div>`,
+            `<div style="font-size:12px;margin-bottom:4px;">对比排序：<strong>${escapeHtml(screeningRankLabel(row))}</strong></div>`,
+            `<div style="font-size:12px;margin-bottom:4px;">热脆弱性对比分：<strong>${escapeHtml(formatNumber(screeningScore(row), 1))}</strong></div>`,
             `<div style="font-size:12px;margin-bottom:4px;">GIS 单元：<strong>${escapeHtml(row.cell_id || '--')}</strong></div>`,
-            `<div style="font-size:12px;margin-bottom:4px;">ASPECT 65+ 占比：<strong>${escapeHtml(formatPercent(screeningRawValue(row, 'age65_share_pct'), 1))}</strong></div>`,
-            `<div style="font-size:12px;margin-bottom:4px;">NASA 历史夏季 LST：<strong>${escapeHtml(formatNumber(screeningRawValue(row, 'q3_lst_c_mean'), 1))} °C</strong></div>`,
-            `<div style="font-size:12px;margin-bottom:4px;">ESA 树木覆盖：<strong>${escapeHtml(formatPercent(screeningRawValue(row, 'tree_cover_pct'), 1))}</strong></div>`,
-            `<div style="font-size:12px;margin-bottom:6px;">Q3 观测覆盖：<strong>${escapeHtml(formatPercent(coverage, 1))}${escapeHtml(coverageCount)}</strong></div>`,
-            '<div style="font-size:12px;color:#475569;border-top:1px solid #e5e7eb;padding-top:6px;">Q3 覆盖仅表示证据质量。省略的临床字段不进入评分。</div>',
+            `<div style="font-size:12px;margin-bottom:4px;">65 岁及以上人口估计占比：<strong>${escapeHtml(formatPercent(screeningRawValue(row, 'age65_share_pct'), 1))}</strong></div>`,
+            `<div style="font-size:12px;margin-bottom:4px;">夏季晴空地表温度：<strong>${escapeHtml(formatNumber(screeningRawValue(row, 'q3_lst_c_mean'), 1))} °C</strong></div>`,
+            `<div style="font-size:12px;margin-bottom:4px;">树木覆盖类面积占比：<strong>${escapeHtml(formatPercent(screeningRawValue(row, 'tree_cover_pct'), 1))}</strong></div>`,
+            `<div style="font-size:12px;margin-bottom:6px;">有效观测覆盖：<strong>${escapeHtml(formatPercent(coverage, 1))}${escapeHtml(coverageCount)}</strong></div>`,
+            '<div style="font-size:12px;color:#475569;border-top:1px solid #e5e7eb;padding-top:6px;">历史数据 · 县内相对比较；有效观测覆盖用于判断数据质量。</div>',
             '</div>'
         ].join('');
     }
@@ -1481,7 +1483,7 @@ function renderRanking(rankings, layerKey) {
         const empty = document.createElement('div');
         empty.className = 'text-muted p-3';
         empty.textContent = isScreeningMode()
-            ? '暂无可用的探索性空间筛查结果。'
+            ? '社区对比数据暂不可用，请查看数据状态。'
             : '暂无社区风险数据';
         container.appendChild(empty);
         return;
@@ -1509,7 +1511,7 @@ function renderRanking(rankings, layerKey) {
         const badge = document.createElement('span');
         badge.className = 'badge bg-secondary me-2';
         badge.textContent = isScreeningMode()
-            ? (rankingEligible ? screeningRankLabel(row, index) : '未进入筛查')
+            ? (rankingEligible ? screeningRankLabel(row, index) : '资料不足，未参与对比')
             : (rankingEligible && row.rank ? `#${row.rank}` : '未排名');
         const strong = document.createElement('strong');
         strong.textContent = row.community || '--';
@@ -1531,7 +1533,7 @@ function renderRanking(rankings, layerKey) {
         } else if (isScreeningMode()) {
             const coordinateText = coordinateAvailable ? '' : ' | 无可用地图坐标';
             info.textContent = [
-                `筛查得分 ${formatNumber(screeningScore(row), 1)}`,
+                `对比分 ${formatNumber(screeningScore(row), 1)}`,
                 `GIS 单元 ${safeText(row.cell_id, '--')}`,
                 `ASPECT 65+ ${formatPercent(screeningRawValue(row, 'age65_share_pct'), 1)}`
             ].join(' | ') + coordinateText;
@@ -1598,21 +1600,13 @@ function renderProfileDataStatus(summary) {
             activeRankingMetadata.message,
             activeRankingMetadata.reason,
             summary.data_message
-        ), '探索性空间证据未通过可用性检查。');
+        ), '社区空间资料暂不可用。');
         // 整体证据不可用时优先解释失败原因，避免把“0 个社区”误读成有效结果。
         const parts = activeRankingStatus === 'unavailable'
-            ? [`探索性筛查证据不可用：${unavailableReason}`]
-            : [`当前为探索性空间筛查：${screenedCount} 个社区按开放地理证据计算相对脆弱性筛查得分。`];
-        parts.push(
-            '省略的临床字段不进入评分。',
-            '本模式不提供预计额外就诊、SIR、热点显著性、Impact × Likelihood 或医疗资源建议。',
-            'Q3 覆盖率只展示证据质量，不参与评分。'
-        );
+            ? [`社区对比数据不可用：${unavailableReason}`]
+            : [`${screenedCount} 个社区已参与热脆弱性对比，可查看差异、安排实地核查。`];
         if (excluded > 0) {
-            parts.push(`${excluded} 个社区因空间证据不完整未进入筛查。`);
-        }
-        if (activeRankingMetadata.weather_context_available === false) {
-            parts.push('本模式未计算天气健康风险；实时天气不参与筛查得分或名次。');
+            parts.push(`${excluded} 个社区空间资料不足，未参与对比；具体原因见数据明细。`);
         }
         alert.className = activeRankingStatus === 'unavailable'
             ? 'alert alert-warning mt-3 mb-0'
@@ -1682,7 +1676,7 @@ function renderSummary(summary) {
         ), '--');
         document.getElementById('kpiScreeningCoverage').textContent = formatPercent(coverageMedian, 1);
 
-        const metaParts = ['探索性空间筛查'];
+        const metaParts = ['历史数据 · 县内相对比较'];
         const bundle = activeRankingMetadata.bundle;
         const bundleVersion = bundle && typeof bundle === 'object'
             ? firstAvailable(bundle.version, bundle.dataset_version, bundle.id)
@@ -1918,7 +1912,7 @@ function renderScreeningDetailTable(rankings) {
         appendTablePlaceholder(
             'screeningDetailTableBody',
             9,
-            '暂无可用的探索性筛查证据。'
+            '暂无可用的社区对比数据。'
         );
         return;
     }
@@ -1931,7 +1925,7 @@ function renderScreeningDetailTable(rankings) {
             tr.style.cursor = 'pointer';
             tr.tabIndex = 0;
             tr.setAttribute('role', 'button');
-            tr.setAttribute('aria-label', `定位到${safeText(row.community, '该社区')}并查看筛查证据`);
+            tr.setAttribute('aria-label', `定位到${safeText(row.community, '该社区')}并查看对比数据`);
             const focusRow = () => focusOnCommunity(row.community, index);
             tr.addEventListener('click', focusRow);
             tr.addEventListener('keydown', event => {
@@ -1949,7 +1943,7 @@ function renderScreeningDetailTable(rankings) {
             : '';
         const lst = screeningRawValue(row, 'q3_lst_c_mean');
         const cells = [
-            rankingEligible ? screeningRankLabel(row, index) : '未进入筛查',
+            rankingEligible ? screeningRankLabel(row, index) : '资料不足，未参与对比',
             safeText(row.community, '--'),
             rankingEligible ? formatNumber(screeningScore(row), 1) : '--',
             safeText(row.cell_id, '--'),
@@ -1957,7 +1951,7 @@ function renderScreeningDetailTable(rankings) {
             lst === null ? '--' : `${formatNumber(lst, 1)} °C`,
             formatPercent(screeningRawValue(row, 'tree_cover_pct'), 1),
             `${formatPercent(screeningRawValue(row, 'q3_coverage_pct'), 1)}${dateCount}`,
-            rankingEligible ? '已进入筛查' : screeningExclusionReason(row)
+            rankingEligible ? '已参与对比' : screeningExclusionReason(row)
         ];
         cells.forEach(value => {
             const td = document.createElement('td');
@@ -1976,18 +1970,15 @@ function renderMethodology(lines) {
         ? lines
         : ['暂无方法说明'];
     if (isScreeningMode()) {
-        const requiredNotes = [
-            '筛查定位：结果是社区间的探索性相对脆弱性与筛查优先序，不是临床风险、真实个人暴露或资源配置结论。',
-            '评分结构：ASPECT 65+ 占比、NASA 历史夏季地表温度与 ESA 低树木覆盖三个主题等权合成。',
-            'Q3 观测覆盖率只用于证据质量展示，不进入评分。',
-            '省略的临床字段不进入评分；本模式不产生预计额外就诊、SIR、Gi* 热点、Impact × Likelihood 或医疗资源建议。'
+        // 对应当前三主题比较契约集中解释方法，避免重复输出旧功能停用清单。
+        const methods = [
+            '计算对象：当前资料完整的社区。用途是比较基础条件、安排实地核查。',
+            '计算公式：对比分=(65 岁及以上人口估计占比分位+夏季晴空地表温度分位+低树木覆盖分位)/3。各主题使用同一批社区作参照。',
+            '人口资料为 ASPECT 2020 年估计；树木覆盖为 ESA WorldCover 2020 年树木覆盖类面积占比；地表温度为 2020–2024 年夏季 Aqua MODIS 白天晴空观测。',
+            '社区配置点匹配所在原生 MODIS 网格，边长约 926.6 米。同一网格内的社区共享指标；相同未四舍五入得分按并列名次排列。',
+            '有效观测覆盖是必需的数据质量字段，不计入对比分。缺少必要指标的社区显示灰色，并列出具体缺项。',
+            '这是历史基础条件的相对比较，不是个人患病概率或实时天气预警。'
         ];
-        const methods = [...suppliedMethods];
-        requiredNotes.forEach(note => {
-            if (!methods.some(line => safeText(line, '').includes(note.slice(0, 8)))) {
-                methods.push(note);
-            }
-        });
         methods.forEach(line => {
             const li = document.createElement('li');
             li.textContent = line;
@@ -2061,14 +2052,14 @@ function clearRiskResults(errorCode) {
     if (refreshButton) refreshButton.disabled = false;
     if (refreshLabel) {
         refreshLabel.textContent = isScreeningMode()
-            ? '重新加载探索性筛查'
+            ? '重新加载社区对比'
             : '重新加载社区分析';
     }
     const profileAlert = document.getElementById('profileDataAlert');
     if (profileAlert) {
         profileAlert.className = 'alert alert-warning mt-3 mb-0';
         profileAlert.textContent = isScreeningMode()
-            ? '探索性空间筛查暂时无法加载。'
+            ? '社区对比暂时无法加载。'
             : (activeRankingMode === 'full_profile'
                 ? '完整社区画像分析暂时无法加载。'
                 : '暂时无法确认社区分析模式。');
@@ -2099,7 +2090,7 @@ function clearRiskResults(errorCode) {
     const listMessage = document.createElement('div');
     listMessage.className = weatherUnavailable ? 'text-warning p-3' : 'text-danger p-3';
     listMessage.textContent = isScreeningMode()
-        ? '暂时无法加载探索性筛查结果，请稍后再试。'
+        ? '暂时无法加载社区对比，请稍后再试。'
         : (weatherUnavailable
             ? '社区排序将在天气更新后显示。'
             : '暂时无法加载社区风险，请稍后再试。');
@@ -2242,7 +2233,7 @@ function restoreRiskRequestControls(page, refreshButton, refreshLabel) {
     if (refreshButton) refreshButton.disabled = false;
     if (refreshLabel) {
         refreshLabel.textContent = isScreeningMode()
-            ? '刷新探索性筛查'
+            ? '刷新社区对比'
             : '查看社区风险';
     }
 }

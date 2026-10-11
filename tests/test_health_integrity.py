@@ -124,7 +124,7 @@ def test_personal_unknown_is_saved_without_fake_risk_score(authenticated_client,
     assert assessment is not None
     assert assessment.risk_score is None
     assert assessment.risk_level == '风险未知'
-    assert '资料完整度' in response.get_data(as_text=True)
+    assert '待补充' in response.get_data(as_text=True)
     payload = json.loads(assessment.explain)['academic_profile']
     assert payload['requires_followup'] is True
     assert payload['data_quality']['input_states']['age']['status'] == 'unknown'

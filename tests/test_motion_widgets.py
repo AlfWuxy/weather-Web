@@ -256,7 +256,7 @@ def test_dashboard_forecast_generation_failure_marks_risk_unknown(client, db_ses
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '待计算' in body
+    assert '天气关注分未知' in body
     assert '风险 低风险 · 阴 · 24°/16°' not in body
 
 

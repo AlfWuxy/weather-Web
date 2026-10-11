@@ -374,7 +374,7 @@ def chronic_risk():
         weather_data, _ = get_weather_with_cache(ensure_user_location_valid())
         health_weather = normalize_health_model_weather(weather_data)
         if health_weather is None:
-            risk_error = '天气正在更新，慢病风险提示暂不显示。请稍后再试。'
+            risk_error = '当前天气数据不可用，暂无法生成慢病照护提醒。'
         else:
             vitals = _parse_chronic_vitals(form_state)
             result = get_chronic_service().predict_individual_risk(
@@ -402,12 +402,12 @@ def chronic_risk():
                     breakdown=None,
                     suggestions=None,
                     risk_error=risk_error,
+                    risk_quality=result.get('data_quality') or {},
                     guest_demo=guest_demo,
                 )
             risk_score = int(round(parsed_risk_score))
-            risk_level = overall.get('level') or _score_level(risk_score)
             risk_comment = (
-                f"当前以{CHRONIC_FORM_LABELS[disease_key]}为重点观察对象，结合天气条件判定为{risk_level}。"
+                f"本次重点关注{CHRONIC_FORM_LABELS[disease_key]}，请结合下方计分依据安排照护。"
             )
             vital_factors = ((result.get('vital_adjustment') or {}).get('factors') or [])
             if vital_factors:

@@ -8,7 +8,7 @@
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-clipboard-pulse"></i> 健康评估</span>
         <h2>健康风险评估</h2>
-        <p>5 项快速筛查,大约需要 2 分钟,帮你建立一份当天风险画像。</p>
+        <p>回答 5 个问题，结合天气查看今天需要留意什么、可以做什么。</p>
     </section>
 
     {# 进度条 #}
@@ -26,7 +26,7 @@
 
         <div class="alert alert-light border small" role="note">
             <i class="bi bi-cloud-check me-1" aria-hidden="true"></i>
-            提交后会结合当前天气生成行动参考。天气更新期间，请稍后再试。
+            请按今天的实际情况填写，提交后查看照护建议。
         </div>
 
         <style>
@@ -87,7 +87,7 @@
         <div class="section-heading mb-3">
             <span class="section-kicker"><i class="bi bi-bar-chart-line"></i> 评估记录</span>
             <h2>最新评估结果</h2>
-            <p>提交后会在这里显示最新一次风险判断与建议。</p>
+            <p>照护关注项是根据天气、健康档案和本次回答整理的提醒，帮助你安排日常照护。</p>
         </div>
 
         {% if assessment %}
@@ -108,17 +108,28 @@
             '不确定性': risk_interval.get('label', '--')
         } %}
         {% set quality = assessment_academic.get('data_quality', {}) %}
+        {% set missing_labels = {'age': '年龄', 'chronic_diseases': '慢病情况', 'temperature': '气温', 'humidity': '湿度', 'aqi': '空气质量（AQI）', 'outdoor_exposure': '户外活动', 'symptom_level': '身体不适', 'hydration': '饮水情况', 'medication_adherence': '用药情况', 'sleep_quality': '睡眠情况', 'vulnerability_index': '社区脆弱性资料', 'burden_score': '社区近期就诊资料', 'population': '社区人口', 'community_context': '社区资料'} %}
+        {% set missing = quality.get('missing_fields', []) %}
+        {% set input_states = quality.get('input_states', {}) %}
         {% if quality.get('requires_followup') %}
-        <div class="alert alert-warning" role="status">风险未知。资料完整度 {{ quality.get('completeness', 0) }}%；请补充资料并安排回访。回访优先级至少为中，并非已判定中风险。</div>
+        <div class="alert alert-warning" role="status">
+            <div>风险未知。资料待补充，建议优先回访。</div>
+            {% if missing %}<div class="small mt-1">缺失或待核实：{% for field in missing %}{{ missing_labels.get(field, field) }}{% if not loop.last %}、{% endif %}{% endfor %}。</div>{% endif %}
+            {% if 'age' in missing or 'chronic_diseases' in missing %}<a href="{{ url_for('user.profile') }}">补充年龄和慢病情况</a>{% endif %}
+            {% if 'outdoor_exposure' in missing or 'symptom_level' in missing or 'hydration' in missing or 'medication_adherence' in missing or 'sleep_quality' in missing %}<a href="#assessForm">补全本次回答</a>{% endif %}
+            {% if 'vulnerability_index' in missing or 'burden_score' in missing or 'population' in missing or 'community_context' in missing %}<div class="small mt-1">请先<a href="{{ url_for('user.profile') }}">核对所属社区</a>；社区人口和就诊资料需由管理方补充。</div>{% endif %}
+            {% if 'temperature' in missing or 'humidity' in missing or 'aqi' in missing %}<div class="small mt-1">天气或空气质量数据不足，待数据可用后重新提交。</div>{% endif %}
+        </div>
         {% endif %}
         <div class="row g-3">
             <div class="col-md-4">
                 <div class="card h-100 border-0 shadow-sm">
                     <div class="card-body">
-                        <div class="text-muted small mb-2">风险等级 {{ metric_info('personal_health_score', health_context) }}</div>
-                        <div class="display-6 fw-bold mb-2">{{ assessment.risk_level or '待评估' }}</div>
+                        <div class="text-muted small mb-2">照护关注程度 {{ metric_info('personal_health_score', health_context) }}</div>
+                        <div class="display-6 fw-bold mb-2">{{ {'低风险': '常规关注', '中风险': '中关注', '高风险': '高关注'}.get(assessment.risk_level, assessment.risk_level or '待评估') }}</div>
                         <div class="text-muted small">
-                            风险得分 {{ assessment.risk_score|round(1) if assessment.risk_score is not none else '--' }}
+                            照护关注分 {{ assessment.risk_score|round(1) if assessment.risk_score is not none else '未生成' }}
+                            {% if assessment.risk_score is not none %}<div>按规则计算，用于安排照护关注，不是患病概率。</div>{% endif %}
                         </div>
                     </div>
                 </div>
@@ -127,10 +138,14 @@
                 <div class="card h-100 border-0 shadow-sm">
                     <div class="card-body">
                         <div class="text-muted small mb-2">天气参考</div>
-                        <div class="fw-semibold mb-2">{{ weather_ref.get('condition', '以最近一次可用天气为准') }}</div>
+                        <div class="fw-semibold mb-2">{{ weather_ref.get('condition') or '本次评估使用的天气' }}</div>
                         <div class="text-muted small">
-                            温度 {{ weather_ref.get('temperature', '--') }}°C / 湿度 {{ weather_ref.get('humidity', '--') }}%
-                            / AQI {% if weather_ref.get('aqi_available') %}{{ weather_ref.get('aqi') }}{% else %}缺失（已对其余可用指标重新归一）{% endif %}
+                            {% set temperature = weather_ref.get('temperature', input_states.get('temperature', {}).get('used_value')) %}
+                            {% set humidity = weather_ref.get('humidity', input_states.get('humidity', {}).get('used_value')) %}
+                            {% set aqi = weather_ref.get('aqi', input_states.get('aqi', {}).get('used_value')) %}
+                            气温 {% if temperature is not none %}{{ temperature }}°C{% else %}不可用{% endif %}
+                            / 湿度 {% if humidity is not none %}{{ humidity }}%{% else %}不可用{% endif %}
+                            / AQI {% if aqi is not none %}{{ aqi }}{% else %}不可用{% endif %}
                         </div>
                     </div>
                 </div>
@@ -152,6 +167,7 @@
             </div>
         </div>
 
+        {% if community_context and not community_context.get('imputed') %}
         <div class="card mt-3 border-0 shadow-sm">
             <div class="card-body">
                 <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
@@ -198,12 +214,15 @@
                 {% if community_context.get('warnings') %}
                 <div class="alert alert-warning small mt-3 mb-0" role="note">
                     <div class="fw-semibold mb-1"><i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>数据说明</div>
-                    <p class="mb-0">部分社区资料尚未完善，相关结果采用一般参考，请结合实际情况使用。</p>
+                    <p class="mb-0">这条记录的社区资料有待核实，请核对资料来源后重新评估。</p>
                 </div>
                 {% endif %}
             </div>
         </div>
 
+        {% elif community_context %}
+        <div class="alert alert-warning small mt-3" role="note">这条历史记录的社区资料不完整，估算值不作为当前分级依据。请<a href="{{ url_for('user.profile') }}">核对所属社区</a>，待资料补齐后重新评估。</div>
+        {% endif %}
         <div class="card mt-3 border-0 shadow-sm">
             <div class="card-body">
                 <div class="fw-semibold mb-3">建议行动</div>
@@ -219,8 +238,9 @@
             </div>
         </div>
 
+        {% set matrix_available = matrix.get('available') and matrix.get('matrix_score') is not none %}
         <div class="row g-3 mt-1">
-            <div class="col-md-6">
+            <div class="{{ 'col-md-6' if matrix_available else 'col-12' }}">
                 <div class="card h-100 border-0 shadow-sm">
                     <div class="card-body">
                         <div class="fw-semibold mb-3">评估依据 {{ metric_info('personal_health_score', health_context) }}</div>
@@ -245,36 +265,18 @@
                     </div>
                 </div>
             </div>
+            {% if matrix_available %}
             <div class="col-md-6">
                 <div class="card h-100 border-0 shadow-sm">
                     <div class="card-body">
-                        <div class="fw-semibold mb-3">行动筛查影响分 {{ metric_info('personal_impact_likelihood', {
-                            'Impact连续分': matrix.get('impact_score', '--'),
-                            'Likelihood原始分': matrix.get('likelihood_raw_score', '--'),
-                            '确定性修正': matrix.get('certainty_adjustment', '--'),
-                            'Likelihood修正后': matrix.get('likelihood_score', '--'),
-                            '矩阵得分': matrix.get('matrix_score', '--')
-                        }) }}</div>
-                        {% if matrix and matrix.get('available') %}
-                            <div class="small mb-2">影响程度：<strong>{{ matrix.get('impact_bucket', '--') }}</strong>（{{ matrix.get('impact_score', '--') }}）</div>
-                            <div class="small mb-2">发生可能性：<strong>{{ matrix.get('likelihood_bucket', '--') }}</strong>（{{ matrix.get('likelihood_score', '--') }}）</div>
-                            <div class="small text-muted">综合位置 {{ matrix.get('matrix_score') }} / 16</div>
-                        {% else %}
-                            {% if matrix and matrix.get('status') == 'disabled_uncalibrated_probability' %}
-                            <div class="small mb-2">影响程度：<strong>{{ matrix.get('impact_bucket', '--') }}</strong>（{{ matrix.get('impact_score', '--') }}）</div>
-                            <div class="small mb-2">发生可能性：<strong>未输出</strong></div>
-                            <div class="small text-muted">Impact × Likelihood 矩阵未启用</div>
-                            <div class="alert alert-light border small mt-3 mb-0" role="note">个人结局概率尚未完成校准，因此不显示低/中/高概率、Likelihood 或 1–16 矩阵。</div>
-                            {% else %}
-                            <div class="small mb-2">影响程度：<strong>--</strong>（--）</div>
-                            <div class="small mb-2">发生可能性：<strong>--</strong>（--）</div>
-                            <div class="small text-muted">综合位置 -- / 16</div>
-                            <div class="alert alert-light border small mt-3 mb-0" role="note">这条历史记录没有完整的评估依据，详细分布暂不显示。</div>
-                            {% endif %}
-                        {% endif %}
+                        <div class="fw-semibold mb-3">影响与可能性 {{ metric_info('personal_impact_likelihood') }}</div>
+                        <div class="small mb-2">影响程度：<strong>{{ matrix.get('impact_bucket', '--') }}</strong>（{{ matrix.get('impact_score', '--') }}）</div>
+                        <div class="small mb-2">发生可能性：<strong>{{ matrix.get('likelihood_bucket', '--') }}</strong>（{{ matrix.get('likelihood_score', '--') }}）</div>
+                        <div class="small text-muted">综合位置 {{ matrix.get('matrix_score') }} / 16</div>
                     </div>
                 </div>
             </div>
+            {% endif %}
         </div>
         {% else %}
         <div class="card border-0 shadow-sm">

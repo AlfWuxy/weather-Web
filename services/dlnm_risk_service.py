@@ -29,6 +29,7 @@ from pathlib import Path
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_PROFILE_PATH = Path(__file__).resolve().parents[1] / 'data' / 'models' / 'final_single_model_ar1_profile.json'
 
 # ============================================================
 # 文献参数 - 基于中国南方亚热带地区多中心研究
@@ -127,6 +128,40 @@ def _to_bool(value, default=False):
     return default
 
 
+def _mmt_boundary_flag(metrics):
+    """诊断缺失与 0/1 结果分开，避免把缺项默认解释为边界异常。"""
+    if not isinstance(metrics, dict):
+        return None
+    value = metrics.get('mmt_boundary_flag')
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value) if value in (0, 1) else None
+
+
+def get_configured_profile_metadata():
+    """读取配置曲线的公开元数据；保持与进程加载状态分开，避免触发训练。"""
+    if not _to_bool(os.getenv('DLNM_USE_PROFILE'), True):
+        return {'status': 'disabled'}
+    path = Path(os.getenv('DLNM_PROFILE_PATH', str(DEFAULT_PROFILE_PATH)))
+    try:
+        profile = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(profile, dict) or not isinstance(profile.get('curve'), list) or not profile['curve']:
+            return {'status': 'unavailable'}
+        mmt = profile.get('mmt')
+        if isinstance(mmt, bool) or not isinstance(mmt, (int, float)) or not np.isfinite(mmt):
+            mmt = None
+        # 仅返回公开字段，文件路径、原始 metrics 与样本信息留在服务内部。
+        version = profile.get('version')
+        return {
+            'status': 'available',
+            'version': version if isinstance(version, str) else None,
+            'mmt': mmt,
+            'mmt_boundary_flag': _mmt_boundary_flag(profile.get('metrics')),
+        }
+    except (OSError, ValueError, TypeError):
+        return {'status': 'unavailable'}
+
+
 class DLNMRiskService:
     """DLNM分布式滞后非线性模型服务
 
@@ -174,7 +209,7 @@ class DLNMRiskService:
         # RR上限
         self.rr_cap_single = LITERATURE_PRIORS['rr_caps']['single_day_morbidity']
         self.rr_cap_cumulative = LITERATURE_PRIORS['rr_caps']['cumulative_morbidity']
-        default_profile = Path(__file__).resolve().parents[1] / 'data' / 'models' / 'final_single_model_ar1_profile.json'
+        default_profile = DEFAULT_PROFILE_PATH
         self.profile_path = Path(
             profile_path or os.getenv('DLNM_PROFILE_PATH', str(default_profile))
         )
@@ -1123,7 +1158,7 @@ class DLNMRiskService:
         return {
             'status': '模型已训练',
             'evidence_status': 'exploratory',
-            'mmt_boundary_flag': int(self.model_profile_metrics.get('mmt_boundary_flag', 1)),
+            'mmt_boundary_flag': _mmt_boundary_flag(self.model_profile_metrics),
             'probability_calibrated': False,
             'threshold_semantics': 'action_communication_interface',
             'model_source': self.model_source,

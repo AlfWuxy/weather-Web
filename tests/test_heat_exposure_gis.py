@@ -35,10 +35,12 @@ def test_heat_exposure_gis_page_has_academic_contract(app, authenticated_client)
     html = response.get_data(as_text=True)
     assert "都昌县 1 km 结构脆弱性 GIS" in html
     assert "独立复核程序通过" in html
-    assert "模型化人口与 Aqua 白天晴空地表温度" in html
-    assert "结果不代表个人健康风险、2 米气温、室内温度或因果效应" in html
+    assert "人口：ASPECT 2020 年估计" in html
+    assert "树木覆盖类面积占比：ESA 2020 年" in html
+    assert "夏季晴空地表温度：2020–2024 年 Aqua 白天观测" in html
+    assert "地表温度与气温、室内温度和人体体感是不同指标" in html
     assert "相对分位、人口支持状态和中位数偏差" in html
-    assert "不增加逐年、逐月或个人层面的新数据" in html
+    assert "相对分位、人口支持状态和中位数偏差均由当前网格数据计算" in html
     assert "2,593" in html
     assert "250,270" in html
     assert "SHA-256" in html
@@ -56,8 +58,8 @@ def test_heat_exposure_gis_page_has_academic_contract(app, authenticated_client)
     assert 'data-has-map-key="1"' in html
     assert "/static/vendor/leaflet/" not in html
     assert "server-key-must-stay-private" not in html
-    assert "网页读取冻结上游产物，不会在线重新估计这些图层" in html
-    assert "程序复核不代表外部机构认证" in html
+    assert "网页读取存档数据" in html
+    assert "这是数据与程序的一致性复核" in html
     assert "生成方法与关键限制" in html
     assert "原始编码乘 0.02 后减 273.15" in html
     assert "科研展示 v1.2" in html
