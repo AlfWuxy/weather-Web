@@ -24,14 +24,14 @@
             {% if not weather_available %}
             <div class="alert alert-warning" role="status">
                 <strong>天气更新中</strong><br>
-                风险等级暂不显示。你仍可复制行动链接和短码，提醒对方完成安全确认或求助。
+                风险等级暂不显示。可在网页行动页输入短码完成确认。微信小程序也可查看提醒。
             </div>
             {% endif %}
             <textarea class="form-control" rows="10" id="wechatMessage" readonly>{{ message }}</textarea>
             <button class="btn btn-primary mt-3" type="button" id="copyMessage">
                 <i class="bi bi-clipboard"></i> {% if weather_available %}复制文本{% else %}复制行动链接说明{% endif %}
             </button>
-            <div class="text-muted small mt-2">建议提醒对方进入链接并输入短码完成确认。</div>
+            <div class="text-muted small mt-2">可在网页行动页输入短码完成确认。微信小程序也可查看提醒。</div>
         </div>
     </div>
 </div>
