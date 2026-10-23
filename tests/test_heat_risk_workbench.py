@@ -109,12 +109,12 @@ def test_daily_api_payload_in_demo_mode(authenticated_client):
 
     assert payload["forecast_source"] == "演示数据"
     assert payload["forecast_status"] == "demo"
-    assert payload["hot_night_tmin_c"] == 26.5
+    assert payload["episode_thresholds"] == {"tmax3_c": 34.2, "tmin3_c": 26.3}
     assert len(payload["days"]) == 7
-    # 演示天气：最高 39 °C、最低 29 °C → 基础 3 级，热夜上调为 4 级。
+    # 演示天气：最高 39/38/37 °C、最低 29/28/29 °C → 3 日均温双触发，基础 3 级上调为 4 级。
     assert payload["days"][0]["base_level"] == 3
     assert payload["days"][0]["level"] == 4
-    assert payload["days"][0]["hot_night"] is True
+    assert payload["days"][0]["episode"] is True
     assert len(payload["villages"]) >= 16
     legacy = [v for v in payload["villages"] if v["id"].startswith("legacy-village:")]
     assert len(legacy) == 16 and all(v["cell_id"] for v in legacy)
@@ -137,32 +137,50 @@ def _days(*pairs):
     [(None, None), (32.9, 0), (33.0, 1), (34.9, 1), (35.0, 2), (36.9, 2), (37.0, 3), (39.9, 3), (40.0, 4)],
 )
 def test_base_hazard_thresholds(tmax, expected):
-    day = classify_daily_hazard([{"temperature_max": tmax, "temperature_min": 20}], hot_night_tmin_c=26.5)[0]
+    day = classify_daily_hazard([{"temperature_max": tmax, "temperature_min": 20}], 34.2, 26.3)[0]
     assert day["base_level"] == expected
     assert day["level"] == expected
 
 
-def test_hot_night_escalates_one_level_only_when_hot():
-    days = classify_daily_hazard(_days((34, 27), (30, 27)), hot_night_tmin_c=26.5)
-    assert days[0]["level"] == 2 and days[0]["escalated"] and days[0]["hot_night"]
-    assert days[1]["level"] == 0 and not days[1]["escalated"]
+def test_episode_requires_both_three_day_means():
+    hot_nights = classify_daily_hazard(_days((35, 27), (35, 27), (35, 27)), 34.2, 26.3)
+    assert [d["level"] for d in hot_nights] == [3, 3, 3]
+    assert all(d["episode"] and d["escalated"] for d in hot_nights)
+    assert hot_nights[0]["tmax3"] == 35.0 and hot_nights[0]["tmin3"] == 27.0
+    assert "持续高温：07-01 至 07-03" in hot_nights[0]["reasons"][-1]
+    # 白天够热但夜间能降温：不触发。
+    cool_nights = classify_daily_hazard(_days((36, 25), (36, 25), (36, 25)), 34.2, 26.3)
+    assert [d["level"] for d in cool_nights] == [2, 2, 2]
+    assert not any(d["episode"] for d in cool_nights)
+    # 夜间闷热但白天不够热：不触发。
+    mild_days = classify_daily_hazard(_days((33, 28), (34, 28), (34, 28)), 34.2, 26.3)
+    assert not any(d["episode"] for d in mild_days)
 
 
-def test_heatwave_escalates_from_third_consecutive_hot_day():
-    days = classify_daily_hazard(_days((35, 24), (36, 24), (35, 24), (34, 24), (35, 24)), hot_night_tmin_c=26.5)
-    assert [d["level"] for d in days] == [2, 2, 3, 1, 2]
-    assert [d["hot_day_run"] for d in days] == [1, 2, 3, 0, 1]
+def test_episode_uses_mean_not_every_day():
+    # 单日 32 °C 不达标，但 3 日平均 34.3 °C 达阈值；32 °C 当天基础 0 级不上调。
+    days = classify_daily_hazard(_days((36, 27), (35, 27), (32, 27)), 34.2, 26.3)
+    assert all(d["episode"] for d in days)
+    assert [d["level"] for d in days] == [3, 3, 0]
 
 
-def test_heatwave_counts_observed_days_before_forecast():
-    days = classify_daily_hazard(_days((35, 24)), hot_night_tmin_c=26.5, prior_hot_days=2)
-    assert days[0]["hot_day_run"] == 3
-    assert days[0]["level"] == 3
+def test_episode_window_uses_last_three_days_at_forecast_end():
+    days = classify_daily_hazard(_days((30, 22), (30, 22), (36, 27), (36, 27), (36, 27)), 34.2, 26.3)
+    assert [d["episode"] for d in days] == [False, False, True, True, True]
+    assert days[4]["tmax3"] == 36.0
+    assert classify_daily_hazard(_days((36, 27), (36, 27)), 34.2, 26.3)[0]["episode"] is False
+
+
+def test_invalid_day_in_window_blocks_episode():
+    days = classify_daily_hazard(_days((36, 27), (None, 27), (36, 27), (36, 27), (36, 27)), 34.2, 26.3)
+    assert days[0]["episode"] is False and days[0]["tmax3"] is None
+    assert days[1]["level"] is None
+    assert days[2]["episode"] is True
 
 
 def test_escalation_caps_at_level_four():
-    days = classify_daily_hazard(_days((41, 30)), hot_night_tmin_c=26.5, prior_hot_days=5)
-    assert days[0]["level"] == 4
+    days = classify_daily_hazard(_days((41, 30), (41, 30), (41, 30)), 34.2, 26.3)
+    assert [d["level"] for d in days] == [4, 4, 4]
 
 
 @pytest.mark.parametrize(
@@ -237,7 +255,7 @@ def test_workbench_counts_and_masks():
     meta, cells = workbench["metadata"], workbench["cells"]
     counts = meta["counts"]
 
-    assert meta["schema_version"] == "2.0.0"
+    assert meta["schema_version"] == "2.1.0"
     assert counts["cells"] == 2593
     assert counts["water_masked_cells"] == 626
     assert counts["land_cells"] == 1967
@@ -298,7 +316,9 @@ def test_townships_and_facilities_cover_county():
 
 def test_daily_threshold_comes_from_local_climate():
     daily = _workbench()["metadata"]["daily"]
-    assert daily["hot_night_tmin_c"] == 26.5
+    assert daily["episode_tmax3_c"] == 34.2
+    assert daily["episode_tmin3_c"] == 26.3
+    assert daily["episode_windows_in_sample"] == 27
     assert daily["climate_sample"]["days"] == 1036
 
 
@@ -351,3 +371,46 @@ def test_tied_scores_share_rank():
             by_score.setdefault(cells["score"][i], set()).add(cells["top_pct"][i])
     assert any(len(v) == 1 for v in by_score.values())
     assert all(len(v) == 1 for v in by_score.values())
+
+
+# ---------------------------------------------------------------------------
+# 夜间地表温度
+# ---------------------------------------------------------------------------
+
+def test_night_lst_source_covers_every_cell():
+    night = json.loads((PROJECT_ROOT / "data/gis/duchang_night_lst_myd11a1.json").read_text(encoding="utf-8"))
+    assert night["metadata"]["granules"] == len(night["granules"]) == 448
+    assert "2 K" in night["metadata"]["q3_rule"]
+    assert night["cells"]["cell_id"] == _workbench()["cells"]["cell_id"]
+    assert all(v is not None and 15 < v < 35 for v in night["cells"]["q3_night_lst_c_mean"])
+    assert min(night["cells"]["q3_night_dates"]) > 0
+
+
+def test_hazard_blends_day_and_night_ranks():
+    workbench = _workbench()
+    cells, meta = workbench["cells"], workbench["metadata"]
+    assert meta["night_layer"]["unit"] == "°C"
+    assert len(meta["night_layer"]["breaks"]) == len(meta["night_layer"]["palette"]) + 1
+    assert meta["bivariate"]["hazard_breaks_pct"]
+    checked = 0
+    for i, scored in enumerate(cells["scored"]):
+        if not scored:
+            continue
+        assert 0 < cells["hazard_day_pct"][i] <= 100
+        assert 0 < cells["hazard_night_pct"][i] <= 100
+        assert cells["night_lst_c"][i] is not None and cells["night_dates"][i] > 0
+        checked += 1
+    assert checked == 1606
+    # 夜间热岛与白天地表温度几乎不相关，夜间分量必须实际改变危险排序。
+    differs = sum(
+        1 for i, scored in enumerate(cells["scored"])
+        if scored and abs(cells["hazard_day_pct"][i] - cells["hazard_pct"][i]) > 10
+    )
+    assert differs > 300
+
+
+def test_frontend_shows_night_layer_and_episode_flag(client):
+    script = (PROJECT_ROOT / "static/js/heat-risk-workbench.js").read_text(encoding="utf-8")
+    assert "night_lst_c" in script
+    assert "持续高温 +1" in script
+    assert "hot_night" not in script and "hot_day_run" not in script
