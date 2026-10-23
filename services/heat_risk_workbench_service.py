@@ -7,7 +7,7 @@
     并计算 Getis-Ord Gi* 热点、权重扰动排名稳定性、乡镇汇总和医疗点可达距离。
 
 运行阶段（请求时）：
-    读取 7 天预报，按中国气象局高温口径与本地热夜阈值给出逐日危险等级，
+    读取 7 天预报，按中国气象局高温口径给出基础等级，再按法国式 3 日均温双触发判断持续性热过程，
     再与网格静态风险组合成逐日风险，用于村级巡访优先排序。
 
 旧版 GIS 页面与其 GeoJSON 保持不变，可通过 HEAT_EXPOSURE_GIS_UI=legacy 回滚。
@@ -20,7 +20,7 @@ import csv
 import hashlib
 import json
 import math
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
@@ -30,8 +30,9 @@ CELLS_GEOJSON_FILENAME = "data/gis/duchang_heat_exposure_cells.geojson"
 WORKBENCH_FILENAME = "data/gis/duchang_heat_risk_workbench.json"
 TOWNSHIPS_SOURCE_PATH = PROJECT_ROOT / "data/gis/duchang_townships_osm.geojson"
 CLIMATE_SOURCE_PATH = PROJECT_ROOT / "data/raw/逐日数据.csv"
+NIGHT_LST_SOURCE_PATH = PROJECT_ROOT / "data/gis/duchang_night_lst_myd11a1.json"
 
-SCHEMA_VERSION = "2.0.0"
+SCHEMA_VERSION = "2.1.0"
 WATER_MASK_PCT = 50.0
 LEVEL_BREAKS = (20.0, 40.0, 60.0, 80.0)
 STABILITY_PERTURBATION = 0.20
@@ -51,7 +52,7 @@ RISK_LEVELS = [
     {"level": 4, "label": "极高", "color": "#7A2418"},
 ]
 
-# 3×3 双变量配色（Stevens 方案）：字母为地表温度三分位，数字为 65+ 比例三分位。
+# 3×3 双变量配色（Stevens 方案）：字母为热危险性（昼夜合成）三分位，数字为 65+ 比例三分位。
 BIVARIATE_PALETTE = {
     "a1": "#e8e8e8", "b1": "#e4acac", "c1": "#c85a5a",
     "a2": "#b0d5df", "b2": "#ad9ea5", "c2": "#985356",
@@ -66,8 +67,12 @@ HAZARD_LEVELS = [
     {"level": 3, "label": "严重高温", "rule": "最高气温 ≥ 37 °C（橙色预警量级）"},
     {"level": 4, "label": "极端高温", "rule": "最高气温 ≥ 40 °C（红色预警量级）"},
 ]
-HEATWAVE_MIN_DAYS = 3
-HOT_DAY_C = 35.0
+# 法国式持续性热过程判定（Météo-France / SACS 的 IBM 指标）：连续 3 天平均最高与平均最低气温同时达到本地阈值。
+EPISODE_WINDOW_DAYS = 3
+EPISODE_PERCENTILE = 95
+
+# 夜间地表温度图层配色（低 → 高）。
+NIGHT_LST_PALETTE = ["#f3f0fa", "#d9d2ee", "#b4a7d9", "#8c79c2", "#6a4fa3", "#46307a"]
 
 ACTION_CARDS = {
     0: {
@@ -116,6 +121,8 @@ SOURCE_NOTES = [
     {"topic": "逐日分级与行动卡", "citation": "NWS HeatRisk", "url": "https://www.wpc.ncep.noaa.gov/heatrisk/"},
     {"topic": "影响 × 可能性矩阵", "citation": "UKHSA Heat-Health Alerting", "url": "https://www.gov.uk/guidance/heat-health-alerting-system"},
     {"topic": "热夜对 65 岁以上人群的影响", "citation": "Wu et al. 2025", "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC12514547/"},
+    {"topic": "夜间地表温度数据", "citation": "NASA MYD11A1.061（Microsoft Planetary Computer 镜像）", "url": "https://planetarycomputer.microsoft.com/dataset/modis-11A1-061"},
+    {"topic": "3 日均温双触发", "citation": "Santé publique France：France's heat health watch warning system（SACS，Pascal et al. 2006）", "url": "https://www.santepubliquefrance.fr/en/node/9106"},
     {"topic": "热浪与老年死亡", "citation": "Pan et al. 2023", "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10063284/"},
     {"topic": "热点分析", "citation": "Getis-Ord Gi*（Esri 方法说明）", "url": "https://doc.esri.com/en/arcgis-pro/latest/tool-reference/spatial-statistics/h-how-hot-spot-analysis-getis-ord-gi-spatial-stati.html"},
     {"topic": "指数排名敏感性", "citation": "Tate 2012, Natural Hazards", "url": "https://link.springer.com/article/10.1007/s11069-012-0152-2"},
@@ -297,7 +304,7 @@ def _benjamini_hochberg(p_values, q):
 
 
 def _read_climate_thresholds(path: Path) -> dict[str, Any]:
-    """从都昌逐日气象计算热夜阈值（全年日最低气温第 95 百分位）。"""
+    """从都昌逐日气象计算 3 日滑动平均最高、最低气温的第 95 百分位（持续性热过程阈值）。"""
     import numpy as np
 
     tmin_column = "2米最低气温 (多源融合)(°C)"
@@ -311,13 +318,27 @@ def _read_climate_thresholds(path: Path) -> dict[str, Any]:
                 dates.append(row["日期"])
             except (KeyError, TypeError, ValueError):
                 continue
-    tmins_arr = np.asarray(tmins)
-    tmaxs_arr = np.asarray(tmaxs)
+    order = np.argsort(np.asarray(dates))
+    dates = [dates[i] for i in order]
+    tmins_arr = np.asarray(tmins)[order]
+    tmaxs_arr = np.asarray(tmaxs)[order]
+    # 只用日期连续的 3 日窗口，缺测断档处不跨越。
+    ordinals = np.array([date.fromisoformat(d[:10]).toordinal() for d in dates])
+    w = EPISODE_WINDOW_DAYS
+    contiguous = np.array([ordinals[i + w - 1] - ordinals[i] == w - 1 for i in range(len(dates) - w + 1)])
+    kernel = np.ones(w) / w
+    tmax3 = np.convolve(tmaxs_arr, kernel, mode="valid")[contiguous]
+    tmin3 = np.convolve(tmins_arr, kernel, mode="valid")[contiguous]
+    tmax3_c = round(float(np.percentile(tmax3, EPISODE_PERCENTILE)), 1)
+    tmin3_c = round(float(np.percentile(tmin3, EPISODE_PERCENTILE)), 1)
     return {
-        "hot_night_tmin_c": round(float(np.percentile(tmins_arr, 95)), 1),
-        "hot_night_rule": "日最低气温 ≥ 都昌全年日最低气温第 95 百分位",
-        "hot_day_tmax_c": HOT_DAY_C,
-        "heatwave_min_days": HEATWAVE_MIN_DAYS,
+        "episode_tmax3_c": tmax3_c,
+        "episode_tmin3_c": tmin3_c,
+        "episode_rule": (
+            f"连续 {w} 天平均最高气温 ≥ {tmax3_c} °C 且平均最低气温 ≥ {tmin3_c} °C"
+            f"（都昌全年 {w} 日滑动平均的第 {EPISODE_PERCENTILE} 百分位）"
+        ),
+        "episode_windows_in_sample": int(((tmax3 >= tmax3_c) & (tmin3 >= tmin3_c)).sum()),
         "climate_sample": {
             "source": "data/raw/逐日数据.csv（多源融合再分析，都昌县城点位）",
             "start": min(dates),
@@ -336,8 +357,9 @@ def build_workbench_data(
     output_path: Path,
     draws: int = STABILITY_DRAWS,
     seed: int = STABILITY_SEED,
+    night_path: Path = NIGHT_LST_SOURCE_PATH,
 ) -> dict[str, Any]:
-    """从已发布的网格 GeoJSON 生成医生工作台所需的风险数据。"""
+    """从已发布的网格 GeoJSON 与夜间地表温度生成医生工作台所需的风险数据。"""
     import numpy as np
     from scipy.stats import norm, rankdata
 
@@ -356,6 +378,15 @@ def build_workbench_data(
     cols = np.array([p["modis_col_0based"] for p in props])
     lst, age = column("q3_lst_c_mean"), column("age65_share_pct")
     tree, built, water = column("tree_cover_pct"), column("built_up_pct"), column("permanent_water_pct")
+
+    night_payload = json.loads(night_path.read_text(encoding="utf-8"))
+    night_by_id = dict(zip(night_payload["cells"]["cell_id"], night_payload["cells"]["q3_night_lst_c_mean"]))
+    night_dates_by_id = dict(zip(night_payload["cells"]["cell_id"], night_payload["cells"]["q3_night_dates"]))
+    missing_night_ids = [p["cell_id"] for p in props if p["cell_id"] not in night_by_id]
+    if missing_night_ids:
+        raise ValueError(f"夜间地表温度缺少 {len(missing_night_ids)} 个网格，例如 {missing_night_ids[0]}")
+    night = np.array([np.nan if night_by_id[p["cell_id"]] is None else float(night_by_id[p["cell_id"]]) for p in props])
+    night_dates = np.array([int(night_dates_by_id[p["cell_id"]]) for p in props])
 
     land = water < WATER_MASK_PCT
     scored = land & ~np.isnan(age) & ~np.isnan(lst)
@@ -383,7 +414,13 @@ def build_workbench_data(
 
     # 各分量在“有人居住的陆地网格”内取百分位。
     s_idx = np.nonzero(scored)[0]
-    hazard = _percentile_rank(lst[s_idx])
+    # 危险性：白天与夜间地表温度各取百分位，取平均后再排一次百分位；缺夜间值时只用白天。
+    hazard_day = _percentile_rank(lst[s_idx])
+    night_s = night[s_idx]
+    night_ok = ~np.isnan(night_s)
+    hazard_night = np.full(len(s_idx), np.nan)
+    hazard_night[night_ok] = _percentile_rank(night_s[night_ok])
+    hazard = _percentile_rank(np.where(night_ok, (hazard_day + hazard_night) / 2.0, hazard_day))
     exposure = _percentile_rank(age[s_idx])
     shade_deficit = _percentile_rank(100.0 - tree[s_idx])
     built_share = _percentile_rank(built[s_idx])
@@ -394,12 +431,16 @@ def build_workbench_data(
     # 等级按发布的一位小数分值划分，避免页面显示分值与等级不一致。
     level = np.digitize(score, LEVEL_BREAKS)
 
-    # 双变量三分位。
-    lst_breaks = np.quantile(lst[s_idx], [1 / 3, 2 / 3])
+    # 双变量三分位：横轴为昼夜合成的热危险性，纵轴为 65+ 比例。
+    hazard_breaks = np.array([1 / 3, 2 / 3])
     age_breaks = np.quantile(age[s_idx], [1 / 3, 2 / 3])
-    lst_class = np.digitize(lst[s_idx], lst_breaks)
+    hazard_class = np.digitize(hazard, hazard_breaks, right=True)
     age_class = np.digitize(age[s_idx], age_breaks)
-    bivariate = [f"{'abc'[a]}{b + 1}" for a, b in zip(lst_class, age_class)]
+    bivariate = [f"{'abc'[a]}{b + 1}" for a, b in zip(hazard_class, age_class)]
+
+    # 夜间图层六分位断点（陆地网格）。
+    night_land = night[land & ~np.isnan(night)]
+    night_breaks = [round(float(v), 2) for v in np.quantile(night_land, np.linspace(0, 1, 7))]
 
     # Gi* 热点，BH FDR 校正。
     gi_z = _gi_star(score, rows[s_idx], cols[s_idx])
@@ -434,7 +475,10 @@ def build_workbench_data(
         "scored": scored.astype(int).tolist(),
         "facility": facility_idx.tolist(),
         "facility_km": np.round(facility_km, 2).tolist(),
-        "hazard_pct": blank(), "exposure_pct": blank(), "vulnerability_pct": blank(),
+        "night_lst_c": [None if np.isnan(v) else round(float(v), 2) for v in night],
+        "night_dates": night_dates.tolist(),
+        "hazard_pct": blank(), "hazard_day_pct": blank(), "hazard_night_pct": blank(),
+        "exposure_pct": blank(), "vulnerability_pct": blank(),
         "shade_deficit_pct": blank(), "built_pct": blank(), "access_pct": blank(),
         "score": blank(), "level": blank(), "bivariate": blank(),
         "gi_z": blank(), "gi_bin": blank(0),
@@ -442,6 +486,8 @@ def build_workbench_data(
     }
     for k, i in enumerate(s_idx):
         fields["hazard_pct"][i] = round(float(hazard[k]) * 100, 2)
+        fields["hazard_day_pct"][i] = round(float(hazard_day[k]) * 100, 2)
+        fields["hazard_night_pct"][i] = None if np.isnan(hazard_night[k]) else round(float(hazard_night[k]) * 100, 2)
         fields["exposure_pct"][i] = round(float(exposure[k]) * 100, 2)
         fields["vulnerability_pct"][i] = round(float(vulnerability[k]) * 100, 2)
         fields["shade_deficit_pct"][i] = round(float(shade_deficit[k]) * 100, 2)
@@ -502,19 +548,30 @@ def build_workbench_data(
             "framework": "IPCC AR6：风险 = 危险性 × 暴露 × 脆弱性",
             "population": "有人居住的陆地网格（正人口支持且水域 < 50%）",
             "normalization": "各分量在评分网格内取平均秩百分位 (0, 1]",
-            "hazard": "Aqua 白天晴空地表温度均值（2020–2024 夏季）",
+            "hazard": "Aqua 白天与夜间晴空地表温度均值（2020–2024 夏季）各取百分位，取平均后再取百分位",
             "exposure": "ASPECT 65 岁及以上人口比例",
             "vulnerability": "树荫缺口（100 − 树木覆盖）、建成区比例、到最近医疗点距离三者百分位均值，再取百分位",
             "combination": "三项等权几何平均 × 100",
             "weights": {"hazard": 1 / 3, "exposure": 1 / 3, "vulnerability": 1 / 3},
             "level_breaks": list(LEVEL_BREAKS),
             "levels": RISK_LEVELS,
-            "limitation": "65+ 为比例而非人数；地表温度不等于气温；尚未用本地就诊结局验证。",
+            "limitation": "65+ 为比例而非人数；地表温度不等于气温，昼夜都只有晴空观测；尚未用本地就诊结局验证。",
+        },
+        "night_layer": {
+            "label": "夏季夜间地表温度",
+            "short_label": "夜间地表温度",
+            "unit": "°C",
+            "digits": 1,
+            "breaks": night_breaks,
+            "palette": NIGHT_LST_PALETTE,
+            "classification": "陆地网格六分位",
+            "definition": "2020 至 2024 年夏季 Aqua 夜间（约 01:30）晴空地表温度均值，质量口径与白天图层相同。",
+            "source": night_payload["metadata"],
         },
         "bivariate": {
-            "x": "晴空地表温度三分位（a 低 → c 高）",
+            "x": "热危险性三分位（白天与夜间地表温度合成，a 低 → c 高）",
             "y": "65+ 人口比例三分位（1 低 → 3 高）",
-            "lst_breaks_c": [round(float(v), 2) for v in lst_breaks],
+            "hazard_breaks_pct": [round(float(v) * 100, 2) for v in hazard_breaks],
             "age65_breaks_pct": [round(float(v), 2) for v in age_breaks],
             "palette": BIVARIATE_PALETTE,
         },
@@ -542,7 +599,7 @@ def build_workbench_data(
         "daily": {
             **_read_climate_thresholds(climate_path),
             "hazard_levels": HAZARD_LEVELS,
-            "escalation": "当日最低气温达到热夜阈值，或已连续 ≥ 3 天最高气温 ≥ 35 °C 时，危险等级上调一级（最高 4 级）",
+            "escalation": "基础等级 ≥ 1 时，若从当日起的连续 3 天（预报末尾两天取最后 3 天）平均最高气温与平均最低气温同时达到本地阈值，危险等级上调一级（最高 4 级）",
             "matrix": "危险等级为 0 时当日风险为 0；否则按静态风险等级调整：静态 0–1 级 −1，2 级不变，3–4 级 +1，结果限定在 1–4 级",
         },
         "action_cards": ACTION_CARDS,
@@ -551,6 +608,7 @@ def build_workbench_data(
             {"logical_name": Path(CELLS_GEOJSON_FILENAME).name, "sha256": _sha256(cells_path)},
             {"logical_name": townships_path.name, "sha256": _sha256(townships_path)},
             {"logical_name": climate_path.name, "sha256": _sha256(climate_path)},
+            {"logical_name": night_path.name, "sha256": _sha256(night_path)},
         ],
     }
 
@@ -594,55 +652,72 @@ def base_hazard_level(tmax: float | None) -> int | None:
     return 0
 
 
+def _episode_window(index: int, count: int) -> range | None:
+    """当日起的 3 天窗口；预报末尾不足 3 天时取最后 3 天。"""
+    if count < EPISODE_WINDOW_DAYS:
+        return None
+    first = min(index, count - EPISODE_WINDOW_DAYS)
+    return range(first, first + EPISODE_WINDOW_DAYS)
+
+
 def classify_daily_hazard(
     forecast: Iterable[dict[str, Any]],
-    hot_night_tmin_c: float,
-    prior_hot_days: int = 0,
+    episode_tmax3_c: float,
+    episode_tmin3_c: float,
 ) -> list[dict[str, Any]]:
     """把预报逐日转换为 0–4 级危险等级。
 
-    prior_hot_days 为预报首日之前已连续出现的高温日数，用于跨越观测与预报识别热浪。
+    基础等级按中国气象局最高气温口径；持续性热过程按法国式 3 日均温双触发上调一级：
+    3 日平均最高气温与 3 日平均最低气温同时达到本地阈值。窗口内任一天温度无效时不判定为热过程。
     """
-    results = []
-    run = max(int(prior_hot_days or 0), 0)
-    for entry in forecast:
+    entries = list(forecast)
+    temps = []
+    for entry in entries:
         tmax = _to_float(entry.get("temperature_max"))
         tmin = _to_float(entry.get("temperature_min"))
-        if tmax is None or tmin is None or tmax < tmin:
-            run = 0
+        temps.append((tmax, tmin) if tmax is not None and tmin is not None and tmax >= tmin else None)
+
+    results = []
+    for index, entry in enumerate(entries):
+        day_date = str(entry.get("forecast_date") or entry.get("date") or "")
+        if temps[index] is None:
             results.append({
-                "date": str(entry.get("forecast_date") or entry.get("date") or ""),
-                "temperature_max": tmax, "temperature_min": tmin,
+                "date": day_date,
+                "temperature_max": _to_float(entry.get("temperature_max")),
+                "temperature_min": _to_float(entry.get("temperature_min")),
                 "humidity": _to_float(entry.get("humidity")),
                 "base_level": None, "level": None, "label": "风险暂不可判定",
-                "hot_night": None, "hot_day_run": None, "escalated": False,
+                "episode": None, "tmax3": None, "tmin3": None, "escalated": False,
                 "reasons": ["预报温度不完整或无效"],
             })
             continue
-        run = run + 1 if tmax is not None and tmax >= HOT_DAY_C else 0
+        tmax, tmin = temps[index]
         base = base_hazard_level(tmax)
-        reasons = []
-        if tmax is not None and base > 0:
-            reasons.append(f"最高气温 {tmax:.0f} °C")
-        hot_night = tmin is not None and tmin >= hot_night_tmin_c
-        heatwave = run >= HEATWAVE_MIN_DAYS
-        level = base
-        if base >= 1 and (hot_night or heatwave):
-            level = min(base + 1, 4)
-        if hot_night and base >= 1:
-            reasons.append(f"热夜：最低气温 {tmin:.0f} °C ≥ {hot_night_tmin_c:.1f} °C")
-        if heatwave:
-            reasons.append(f"连续第 {run} 个高温日")
+        reasons = [f"最高气温 {tmax:.0f} °C"] if base > 0 else []
+        window = _episode_window(index, len(entries))
+        tmax3 = tmin3 = None
+        if window is not None and all(temps[i] is not None for i in window):
+            tmax3 = round(sum(temps[i][0] for i in window) / len(window), 1)
+            tmin3 = round(sum(temps[i][1] for i in window) / len(window), 1)
+        episode = tmax3 is not None and tmax3 >= episode_tmax3_c and tmin3 >= episode_tmin3_c
+        level = min(base + 1, 4) if base >= 1 and episode else base
+        if episode and base >= 1:
+            first, last = entries[window[0]], entries[window[-1]]
+            span = f"{str(first.get('forecast_date') or first.get('date'))[5:]} 至 {str(last.get('forecast_date') or last.get('date'))[5:]}"
+            reasons.append(
+                f"持续高温：{span} 平均最高 {tmax3:.1f} °C、平均最低 {tmin3:.1f} °C，均达本地阈值"
+            )
         results.append({
-            "date": str(entry.get("forecast_date") or entry.get("date") or ""),
+            "date": day_date,
             "temperature_max": tmax,
             "temperature_min": tmin,
             "humidity": _to_float(entry.get("humidity")),
             "base_level": base,
             "level": level,
             "label": HAZARD_LEVELS[level]["label"],
-            "hot_night": bool(hot_night),
-            "hot_day_run": run,
+            "episode": bool(episode),
+            "tmax3": tmax3,
+            "tmin3": tmin3,
             "escalated": level > base,
             "reasons": reasons,
         })
@@ -829,11 +904,12 @@ def rank_villages(villages: list[dict[str, Any]], day: dict[str, Any] | None, li
     return ranked[:limit] if limit else ranked
 
 
-def build_daily_payload(forecast: list[dict[str, Any]], prior_hot_days: int, villages, cooling, source: str,
+def build_daily_payload(forecast: list[dict[str, Any]], villages, cooling, source: str,
                         status: str = "ok", notice: str = ""):
     workbench = load_workbench()
-    threshold = workbench["metadata"]["daily"]["hot_night_tmin_c"]
-    days = classify_daily_hazard(forecast, threshold, prior_hot_days)
+    daily_meta = workbench["metadata"]["daily"]
+    thresholds = {"tmax3_c": daily_meta["episode_tmax3_c"], "tmin3_c": daily_meta["episode_tmin3_c"]}
+    days = classify_daily_hazard(forecast, thresholds["tmax3_c"], thresholds["tmin3_c"])
     priority = []
     for day in days:
         ranked = rank_villages(villages, day, limit=0)
@@ -844,7 +920,7 @@ def build_daily_payload(forecast: list[dict[str, Any]], prior_hot_days: int, vil
         "forecast_source": source,
         "forecast_status": status,
         "forecast_notice": notice,
-        "hot_night_tmin_c": threshold,
+        "episode_thresholds": thresholds,
         "days": days,
         "villages": villages,
         "priority": priority,
@@ -864,19 +940,12 @@ def daily_payload_for_request():
     from flask import current_app
 
     from core.db_models import Community, CoolingResource
-    from core.weather import _weather_cache_location, get_consecutive_hot_days
+    from core.weather import _weather_cache_location
     from services.heat_risk_workbench_forecast import get_workbench_forecast
     from services.heat_risk_poi_service import build_poi_payload
 
     location = _weather_cache_location(current_app.config.get("HEAT_WORKBENCH_LOCATION") or "都昌")
     forecast, status, source, notice = get_workbench_forecast(location)
-    prior = 0
-    try:
-        if forecast and status != "demo":
-            previous_day = date.fromisoformat(forecast[0]["forecast_date"]) - timedelta(days=1)
-            prior = max(int(get_consecutive_hot_days(location, target_date=previous_day, threshold=HOT_DAY_C) or 0), 0)
-    except Exception:
-        prior = 0
     try:
         communities = Community.query.all()
     except Exception:
@@ -887,7 +956,7 @@ def daily_payload_for_request():
         cooling_rows = []
     villages = village_points(current_app.config.get("COMMUNITY_COORDS_GCJ") or {}, communities)
     points = build_poi_payload(villages, cooling_rows)
-    payload = build_daily_payload(forecast, prior, points["villages"], points["cooling_resources"], source, status, notice)
+    payload = build_daily_payload(forecast, points["villages"], points["cooling_resources"], source, status, notice)
     payload.update(points)
     return payload
 

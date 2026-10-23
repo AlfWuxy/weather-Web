@@ -8,7 +8,8 @@
     // 常量
     // ------------------------------------------------------------------
     const RAW_LAYERS = {
-        q3_lst_c_mean: {label: '晴空地表温度', unit: '°C', digits: 1},
+        q3_lst_c_mean: {label: '白天地表温度', unit: '°C', digits: 1},
+        night_lst_c: {label: '夜间地表温度', unit: '°C', digits: 1},
         age65_share_pct: {label: '65+ 人口比例', unit: '%', digits: 1},
         tree_cover_pct: {label: '树木覆盖', unit: '%', digits: 1},
         built_up_pct: {label: '建成区覆盖', unit: '%', digits: 1},
@@ -285,7 +286,10 @@
         const status = state.daily.forecast_status;
         const prefix = status === 'demo' ? '演示数据，仅供演示 · ' : status === 'fallback' ? '备用预报 · ' : '';
         const source = state.daily.forecast_source ? `来源：${state.daily.forecast_source}` : '天气预报不可用';
-        const threshold = isNum(state.daily.hot_night_tmin_c) ? ` · 热夜阈值 ${fmt(state.daily.hot_night_tmin_c, 1)} °C` : '';
+        const episode = state.daily.episode_thresholds || {};
+        const threshold = isNum(episode.tmax3_c) && isNum(episode.tmin3_c)
+            ? ` · 持续高温阈值：3 日均最高 ${fmt(episode.tmax3_c, 1)} °C 且均最低 ${fmt(episode.tmin3_c, 1)} °C`
+            : '';
         const notice = state.daily.forecast_notice ? ` · ${state.daily.forecast_notice}` : '';
         return `${prefix}${source}${threshold}${notice}`;
     }
@@ -359,6 +363,10 @@
                 facility: fields.facility[i],
                 facility_km: fields.facility_km[i],
                 hazard_pct: fields.hazard_pct[i],
+                hazard_day_pct: fields.hazard_day_pct[i],
+                hazard_night_pct: fields.hazard_night_pct[i],
+                night_lst_c: fields.night_lst_c[i],
+                night_dates: fields.night_dates[i],
                 exposure_pct: fields.exposure_pct[i],
                 vulnerability_pct: fields.vulnerability_pct[i],
                 shade_deficit_pct: fields.shade_deficit_pct[i],
@@ -383,7 +391,13 @@
 
     function cellValue(cell, layer) {
         if (layer === 'facility_km') return cell.facility_km;
+        if (layer === 'night_lst_c') return cell.night_lst_c;
         return cell.p[layer];
+    }
+
+    // 夜间图层的断点与配色来自风险分数据，其余原始图层来自科研版 GeoJSON。
+    function rawLayerSpec(layer) {
+        return layer === 'night_lst_c' ? state.meta.night_layer : state.cellMeta.layers[layer];
     }
 
     function rampColor(value, breaks, palette) {
@@ -403,8 +417,8 @@
             return isLevel(level) ? {color: levelInfo(level).color} : {color: NODATA_FILL, nodata: true};
         }
         if (layer === 'facility_km') return {color: rampColor(cell.facility_km, FACILITY_RAMP.breaks, FACILITY_RAMP.palette)};
-        const spec = state.cellMeta.layers[layer];
-        const value = cell.p[layer];
+        const spec = rawLayerSpec(layer);
+        const value = cellValue(cell, layer);
         if (!isNum(value)) return {color: NODATA_FILL, nodata: true};
         return {color: rampColor(value, spec.breaks, spec.palette)};
     }
@@ -526,11 +540,11 @@
         if (!cell.land) text = '湖面（不评分）';
         else if (layer === 'daily') text = !isLevel(currentHazard()) ? UNKNOWN_RISK : cell.scored ? `${demoPrefix()}当日 ${combineDailyLevel(currentHazard(), cell.level)} 级 · 综合分 ${fmt(cell.score, 0)}` : '无常住人口';
         else if (layer === 'score') text = cell.scored ? `综合分 ${fmt(cell.score, 0)} · ${levelInfo(cell.level).label}` : '无常住人口';
-        else if (layer === 'bivariate') text = cell.scored ? `${cell.bivariate.toUpperCase()} · 地表 ${fmt(cell.p.q3_lst_c_mean, 1)} °C · 65+ ${fmt(cell.p.age65_share_pct, 1)}%` : '无常住人口';
+        else if (layer === 'bivariate') text = cell.scored ? `${cell.bivariate.toUpperCase()} · 热危险 P${fmt(cell.hazard_pct, 0)}（昼 ${fmt(cell.p.q3_lst_c_mean, 1)} °C / 夜 ${fmt(cell.night_lst_c, 1)} °C）· 65+ ${fmt(cell.p.age65_share_pct, 1)}%` : '无常住人口';
         else if (layer === 'facility_km') text = `距可达性参考点 ${fmt(cell.facility_km, 1)} km（直线）`;
         else {
             const spec = RAW_LAYERS[layer];
-            text = `${spec.label} ${fmt(cell.p[layer], spec.digits)} ${spec.unit}`;
+            text = `${spec.label} ${fmt(cellValue(cell, layer), spec.digits)} ${spec.unit}`;
         }
         wrapper.appendChild(el('span', null, text));
         return wrapper;
@@ -937,7 +951,7 @@
         const nodes = [];
         if (state.swipe) {
             nodes.push(el('div', 'hrw-legend-title', '卷帘对比'));
-            nodes.push(el('p', 'hrw-legend-note', '左：晴空地表温度；右：65+ 人口比例。拖动中线比较。'));
+            nodes.push(el('p', 'hrw-legend-note', '左：白天地表温度；右：65+ 人口比例。拖动中线比较。'));
         } else if (state.layer === 'daily' || state.layer === 'score') {
             const day = currentDay();
             nodes.push(el('div', 'hrw-legend-title', state.layer === 'daily' ? `当日风险 · ${day ? dayLabel(day.date) : '预报不可用'}` : '综合热风险分'));
@@ -959,14 +973,14 @@
                 });
             });
             const wrap = el('div', 'hrw-bivariate-wrap');
-            wrap.append(el('span', 'hrw-bivariate-y', '↑ 65+ 比例'), grid, el('span', 'hrw-bivariate-x', '地表温度 →'));
+            wrap.append(el('span', 'hrw-bivariate-y', '↑ 65+ 比例'), grid, el('span', 'hrw-bivariate-x', '热危险（昼夜）→'));
             nodes.push(wrap);
             nodes.push(el('p', 'hrw-legend-note', '右上角深色 = 又热又老'));
         } else if (state.layer === 'facility_km') {
             nodes.push(el('div', 'hrw-legend-title', '距可达性参考点（km，直线）'));
             FACILITY_RAMP.palette.forEach((color, k) => nodes.push(legendRow(color, FACILITY_RAMP.labels[k])));
         } else {
-            const spec = state.cellMeta.layers[state.layer];
+            const spec = rawLayerSpec(state.layer);
             const raw = RAW_LAYERS[state.layer];
             nodes.push(el('div', 'hrw-legend-title', `${raw.label}（${raw.unit}）`));
             spec.palette.slice().reverse().forEach((color, k) => {
@@ -1071,7 +1085,9 @@
         const facility = state.facilities[cell.facility];
         ui.breakdown.replaceChildren(
             el('div', 'hrw-breakdown-title', '风险构成（全县百分位）'),
-            barRow('危险性 · 地表温度', cell.hazard_pct, `${fmt(cell.p.q3_lst_c_mean, 1)} °C`),
+            barRow('危险性 · 昼夜地表温度', cell.hazard_pct, null),
+            barRow('白天地表温度', cell.hazard_day_pct, `${fmt(cell.p.q3_lst_c_mean, 1)} °C`, true),
+            barRow('夜间地表温度', cell.hazard_night_pct, `${fmt(cell.night_lst_c, 1)} °C`, true),
             barRow('暴露 · 65+ 比例', cell.exposure_pct, `${fmt(cell.p.age65_share_pct, 1)}%`),
             barRow('脆弱性', cell.vulnerability_pct, null),
             barRow('树荫缺口', cell.shade_deficit_pct, `树木覆盖 ${fmt(cell.p.tree_cover_pct, 0)}%`, true),
@@ -1087,7 +1103,7 @@
         fact(ui.facts, '模型可达性参考点', facility ? `${referenceName(facility)} · ${fmt(cell.facility_km, 1)} km（直线）` : '—');
         fact(ui.facts, '近似永久水域', `${fmt(cell.p.permanent_water_pct, 1)}%`);
         fact(ui.facts, '表面高程', `${fmt(cell.p.mean_elevation_m, 0)} m`);
-        fact(ui.facts, 'Q3 合格观测', `${cell.p.q3_dates} / ${cell.p.local_available_dates} 天`);
+        fact(ui.facts, 'Q3 合格观测（昼 / 夜）', `${cell.p.q3_dates} / ${isNum(cell.night_dates) ? cell.night_dates : '—'}（共 ${cell.p.local_available_dates} 天）`);
 
         ui.provenance.replaceChildren();
         fact(ui.provenance, 'cell ID', cell.id);
@@ -1413,7 +1429,7 @@
             const temps = `${fmt(day.temperature_max, 0)}° / ${fmt(day.temperature_min, 0)}°`;
             button.append(
                 el('span', 'hrw-day-date', dayLabel(day.date)),
-                el('span', 'hrw-day-flag', isLevel(hazard) && day.escalated ? (day.hot_night ? '热夜 +1' : '热浪 +1') : ''),
+                el('span', 'hrw-day-flag', isLevel(hazard) && day.escalated ? '持续高温 +1' : ''),
                 levelText,
                 el('span', 'hrw-day-temp', temps)
             );

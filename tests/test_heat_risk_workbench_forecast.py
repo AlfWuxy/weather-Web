@@ -211,24 +211,22 @@ def test_openmeteo_parser_does_not_replace_missing_temperature(app, monkeypatch)
         assert forecast_service.validated_forecast(parsed, "Open-Meteo") == []
 
 
-def test_observed_heatwave_does_not_require_today_record(production_forecasts, authenticated_client, db_session, monkeypatch):
+def test_production_forecast_uses_three_day_dual_trigger(production_forecasts, authenticated_client, monkeypatch):
     from core import weather
-    from core.db_models import WeatherData
-    from core.time_utils import today_local
 
-    production_forecasts.config["HEAT_WORKBENCH_LOCATION"] = " 都昌 "
-    for offset in (1, 2):
-        db_session.add(WeatherData(location="都昌县", date=today_local() - timedelta(days=offset), temperature_max=36))
-    db_session.commit()
+    hot = [{**day, "temperature_min": 27} for day in _forecast()]
     monkeypatch.setattr(weather, "get_qweather_forecast_with_cache", lambda *a, **kw: (_forecast(), False, {}))
     payload = authenticated_client.get("/heat-exposure-gis/daily.json").get_json()
-    assert payload["days"][0]["hot_day_run"] == 3
-    assert payload["days"][0]["level"] == 3
+    # 36/24 °C：白天达标、夜间可降温，不触发持续高温，维持基础 2 级。
+    assert payload["days"][0]["episode"] is False and payload["days"][0]["level"] == 2
+    monkeypatch.setattr(weather, "get_qweather_forecast_with_cache", lambda *a, **kw: (hot, False, {}))
+    payload = authenticated_client.get("/heat-exposure-gis/daily.json").get_json()
+    assert payload["days"][0]["episode"] is True and payload["days"][0]["level"] == 3
 
 
 @pytest.mark.parametrize("high,low", [(None, 29), (36, None), (float("nan"), 24), (36, float("inf")), (20, 25)])
 def test_missing_temperature_never_means_low_risk(high, low):
-    day = classify_daily_hazard([{"temperature_max": high, "temperature_min": low}], 26.5)[0]
+    day = classify_daily_hazard([{"temperature_max": high, "temperature_min": low}], 34.2, 26.3)[0]
     assert day["level"] is None and day["label"] == "风险暂不可判定"
     assert rank_villages([{"name": "村", "static_level": 4}], day) == []
 
@@ -236,8 +234,8 @@ def test_missing_temperature_never_means_low_risk(high, low):
 def test_four_villages_use_actual_grid_and_village_township(app):
     villages = {row["name"]: row for row in village_points(app.config["COMMUNITY_COORDS_GCJ"])}
     expected = {
-        "牛家垄周村": ("h28v06-r0079-c0156", 26), "新屋汪家": ("h28v06-r0078-c0154", 23.4),
-        "段家颈村": ("h28v06-r0079-c0155", 43), "上下付村": ("h28v06-r0080-c0156", 44),
+        "牛家垄周村": ("h28v06-r0079-c0156", 33.8), "新屋汪家": ("h28v06-r0078-c0154", 41.4),
+        "段家颈村": ("h28v06-r0079-c0155", 53.2), "上下付村": ("h28v06-r0080-c0156", 47.9),
     }
     for name, (cell_id, score) in expected.items():
         assert villages[name]["cell_id"] == cell_id
