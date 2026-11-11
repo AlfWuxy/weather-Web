@@ -59,6 +59,12 @@ jobs:
             exit 1
           fi
 
+          tracked_links=$(git ls-files -s | awk '$1 == "120000" {print $4}')
+          if [ -n "$tracked_links" ]; then
+            printf '发现已入库的符号链接：\n%s\n' "$tracked_links" >&2
+            exit 1
+          fi
+
           if git grep -nE \
             '(AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' \
             -- . ':(exclude)tests/**' ':(exclude).github/workflows/ci.yml'; then
@@ -91,4 +97,4 @@ jobs:
           node-version: "20"
 
       - name: 运行前端与小程序安全回归
-        run: node --test tests/test_heat_risk_workbench_frontend.js tests/test_miniprogram_elders_paging.js tests/test_miniprogram_token_lifecycle.js
+        run: node --test tests/test_heat_risk_workbench_frontend.js tests/test_miniprogram_elders_paging.js tests/test_miniprogram_token_lifecycle.js tests/test_miniprogram_bind_token_mask.js tests/test_amap_sandbox_isolation.js

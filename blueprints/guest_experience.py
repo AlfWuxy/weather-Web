@@ -57,7 +57,7 @@ def _form_payload():
 
 def _unavailable(error):
     response = make_response(render_template('guest_experience_unavailable.html', error=error), error.status_code)
-    response.headers['Cache-Control'] = 'no-store, private'
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, private, max-age=0'
     return response
 
 
@@ -90,7 +90,7 @@ def require_available_guest_profile():
 def prevent_guest_caching(response):
     # 不在响应阶段读取匿名 session，保留首页原有的 Cloudflare 微缓存边界。
     if request.blueprint == bp.name or request.endpoint == 'public.guest_login' or getattr(g, 'guest_experience_identity', False):
-        response.headers['Cache-Control'] = 'no-store, private'
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, private, max-age=0'
         response.vary.add('Cookie')
     return response
 

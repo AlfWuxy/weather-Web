@@ -24,12 +24,496 @@ import numpy as np
 from datetime import datetime, timedelta
 import json
 import os
-from flask import current_app, has_app_context
+from flask import current_app, has_app_context, has_request_context
+
+
+_PUBLIC_HEALTH_STAT_FIELDS = (
+    'population',
+    'elderly_ratio',
+    'chronic_disease_ratio',
+    'vulnerability_index',
+    'vulnerability_level',
+    'vulnerability_details',
+    'risk_level',
+    'baseline_visits',
+)
+
+# 这些字段能单独或互相回推出村级就诊整数。
+_CASE_COUNT_FIELDS = (
+    'observed_cases',
+    'expected_cases',
+    'sir',
+    'ci_low',
+    'ci_high',
+    'smoothed_sir',
+    'probability_exceed_baseline',
+)
+
+# 风险地图排名行上的人口学/脆弱性精确值。小样本、公开或未授权时不返回。
+_RANKING_DEMOGRAPHIC_FIELDS = (
+    'population',
+    'elderly_ratio',
+    'chronic_disease_ratio',
+    'vulnerability_index',
+)
+
+# Excess = max(WeatherRR-1, 0) × VI × BaselineVisits。这些分量留在抑制行里就能回推 VI。
+_HAZARD_FORMULA_RECONSTRUCTABLE_FIELDS = (
+    'weather_rr',
+    'vi',
+    'baseline_visits',
+    'excess',
+    'hazard',
+    'efold',
+)
+
+_SUPPRESSED_HAZARD_FORMULA_NOTE = '精确脆弱性与超额风险分量已按权限或最小样本抑制'
+
+# 公开排名把 normalized_score 放在 risk_score 上。它和 weather_hazard_score
+# 都是 Excess 的可逆危险度；relative_index 与原始 RiskScore=RR×VI×Baseline 成比例。
+# 这些字段配公开 macro RR 和固定 baseline 能还原 VI。排名与综合预警 top_risk 共用同一行。
+_VI_RECONSTRUCTABLE_SCORE_FIELDS = (
+    'expected_excess_visits',
+    'normalized_score',
+    'weather_hazard_score',
+    'relative_index',
+)
+
+# risk_index/uncertainty_penalty - w_weather*weather_hazard_score - w_burden*burden_percentile
+# 再除以 w_svi，可还原 svi_percentile。抑制行上这组输入必须同时失效。
+_SUPPRESSED_DECOMPOSITION_FIELDS = (
+    'risk_index',
+    'risk_score',
+    'weather_hazard_score',
+    'burden_percentile',
+    'uncertainty_penalty',
+    'risk_weights',
+    'relative_index',
+    'expected_excess_visits',
+)
+
+# heatrisk_level 由 risk_index 分档；uncertainty_index 与 hotspot_z/p 是连续派生量。
+# 抑制行留下它们，仍能还原被清空的风险指数和不确定度。
+_SUPPRESSED_DERIVED_HEAT_FIELDS = (
+    'heatrisk_level',
+    'heatrisk_label',
+    'heatrisk_color',
+    'uncertainty_index',
+    'hotspot_z',
+    'hotspot_p',
+    'hotspot_category',
+)
+
+# likelihood_bucket 与 matrix_score 是 Impact×Likelihood 的公开分档。
+# risk_level 与 color 是同一危险度档位。impact_bucket、certainty 会把影响档和
+# 样本阈值带回公开结果。抑制行留下它们仍等于公布风险等级。
+_SUPPRESSED_PUBLIC_RISK_FIELDS = (
+    'likelihood_bucket',
+    'matrix_score',
+    'risk_level',
+    'color',
+    'impact_bucket',
+    'certainty',
+)
+
+_IMPACT_MATRIX_LEVELS = ('low', 'medium', 'high', 'very_high')
+
+_HOTSPOT_COUNT_LABELS = (
+    '热点(99%)',
+    '热点(95%)',
+    '冷点(99%)',
+    '冷点(95%)',
+    '无显著',
+    '样本不足',
+)
+
+
+def _community_min_sample_size():
+    """最小公布样本。优先读 community_access，未提供时用应用配置。"""
+    try:
+        from core.community_access import community_min_sample_size
+    except ImportError:
+        community_min_sample_size = None
+    if community_min_sample_size is not None:
+        try:
+            return int(community_min_sample_size())
+        except Exception:
+            pass
+    default = 10
+    if has_app_context():
+        try:
+            return int(current_app.config.get('COMMUNITY_MIN_SAMPLE_SIZE', default))
+        except Exception:
+            return default
+    return default
+
+
+def _can_view_community_health_stats(community_name):
+    """当前请求能否查看该村健康统计。辅助未就绪时按患者社区范围等价判断。"""
+    try:
+        from core.community_access import can_view_community_health_stats
+    except ImportError:
+        can_view_community_health_stats = None
+    if can_view_community_health_stats is not None:
+        try:
+            return bool(can_view_community_health_stats(community_name))
+        except Exception:
+            return False
+    try:
+        from core.community_access import patient_community_scope
+        scope = patient_community_scope()
+    except Exception:
+        return False
+    if scope is None:
+        return True
+    try:
+        return bool(community_name) and community_name in scope
+    except TypeError:
+        return False
+
+
+def _sample_below_minimum(raw_population, min_sample):
+    if raw_population is None:
+        return True
+    try:
+        return float(raw_population) < float(min_sample)
+    except (TypeError, ValueError):
+        return True
+
+
+def _community_stats_min_n():
+    """就诊计数的 k-匿名阈值。
+
+    显式 COMMUNITY_STATS_MIN_N 优先，否则沿用社区统计最小样本。
+    """
+    raw = os.environ.get('COMMUNITY_STATS_MIN_N')
+    if has_app_context():
+        try:
+            configured = current_app.config.get('COMMUNITY_STATS_MIN_N')
+        except Exception:
+            configured = None
+        if configured is not None:
+            raw = configured
+    if raw is not None and str(raw).strip() != '':
+        try:
+            return max(int(str(raw).strip()), 1)
+        except (TypeError, ValueError):
+            pass
+    return _community_min_sample_size()
+
+
+def _case_count_sample_size(profile):
+    """公开判断用原始人口。缺失的 raw_population 不能被代理人口 100 抬过阈值。"""
+    if not isinstance(profile, dict):
+        return None
+    if 'raw_population' in profile:
+        return profile.get('raw_population')
+    return profile.get('population')
+
+
+def _case_count_publication(community_name, sample_size):
+    """决定一个村的就诊计数能否出现在风险地图结果里。
+
+    小于 k 的样本一律不公布精确整数，包括已授权请求和预计算缓存。
+    样本达到阈值时，管理员和已授权社区保留精确值；请求内的未授权查看者仍隐藏。
+    无请求上下文的内部计算只对小样本失败关闭，避免把大样本计数从预计算里抹掉。
+    """
+    below = _sample_below_minimum(sample_size, _community_stats_min_n())
+    if not has_request_context():
+        authorized = None
+    else:
+        authorized = _can_view_community_health_stats(community_name)
+    if below:
+        return {'hide': True, 'suppressed': True, 'redacted': authorized is False}
+    if authorized is False:
+        return {'hide': True, 'suppressed': False, 'redacted': True}
+    return {'hide': False, 'suppressed': False, 'redacted': False}
+
+
+def _ranking_demographics_hidden(community_name, sample_size):
+    """排名行是否隐藏人口学和脆弱性精确值。
+
+    公开、未授权，或样本小于 k 时隐藏。
+    无请求上下文只隐藏小样本，避免预计算把达标社区从授权缓存里抹掉。
+    """
+    if _sample_below_minimum(sample_size, _community_stats_min_n()):
+        return True
+    if not has_request_context():
+        return False
+    return not _can_view_community_health_stats(community_name)
+
+
+def _clear_risk_contributions(container):
+    """就地清空贡献表。地图要素与排名行共用同一字典时一起失效。"""
+    if not isinstance(container, dict):
+        return
+    contributions = container.get('risk_contributions')
+    if isinstance(contributions, dict):
+        contributions.clear()
+        return
+    container['risk_contributions'] = {}
+
+
+def _is_real_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _sum_published_excess(rows):
+    """只加仍公开的预计超额就诊。没有可公布的数时返回 None，避免用合计做减法。"""
+    total = 0.0
+    saw_number = False
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        value = row.get('expected_excess_visits')
+        if not _is_real_number(value):
+            continue
+        total += float(value)
+        saw_number = True
+    if not saw_number:
+        return None
+    return total
+
+
+def _null_suppressed_decomposition(container):
+    """清掉能线性还原 svi_percentile 的风险分解。排名行与地图 properties 共用。"""
+    if not isinstance(container, dict):
+        return
+    for field in _SUPPRESSED_DECOMPOSITION_FIELDS:
+        container[field] = None
+
+
+def _null_suppressed_derived_heat_fields(container):
+    """清掉抑制对象上由风险指数、不确定度和热点统计推出的派生量。"""
+    if not isinstance(container, dict):
+        return
+    for field in _SUPPRESSED_DERIVED_HEAT_FIELDS:
+        if field in container:
+            container[field] = None
+
+
+def _null_suppressed_public_risk_fields(container):
+    """清掉抑制对象上仍会公开风险档位的字段。"""
+    if not isinstance(container, dict):
+        return
+    for field in _SUPPRESSED_PUBLIC_RISK_FIELDS:
+        if field in container:
+            container[field] = None
+
+
+def _suppress_reconstructable_risk_fields(row):
+    """抑制行去掉可回推 VI 的公式分量，以及能解出 SVI 分位的风险分解。
+
+    expected_excess_visits、危险度（公开 risk_score / weather_hazard_score）
+    和 relative_index 留在抑制行上时，配公开 macro RR 与固定 baseline 能还原 VI。
+    risk_index、uncertainty_penalty、burden_percentile、risk_weights 再配危险度，
+    可还原 svi_percentile。heatrisk_level、uncertainty_index、hotspot_z 是这些量的
+    派生结果，留下档位或连续值仍能还原。likelihood_bucket、matrix_score、
+    risk_level、color、impact_bucket、certainty 直接给出风险档位或样本阈值，
+    抑制行一并置空。排名和综合预警的 top_risk 使用同一批行。
+    """
+    formula = row.get('hazard_formula')
+    if isinstance(formula, dict):
+        formula['expression'] = _SUPPRESSED_HAZARD_FORMULA_NOTE
+        for field in _HAZARD_FORMULA_RECONSTRUCTABLE_FIELDS:
+            formula[field] = None
+    row['theme_scores'] = None
+    row['svi_percentile'] = None
+    # (after_penalty - weather - burden) / risk_weights['svi'] 可还原 svi_percentile。
+    # svi、before_penalty 单独也能还原。整表清空后这组方程缺项。
+    _clear_risk_contributions(row)
+    # Q1–Q4 是 SVI 的分位桶，能给风险指数回推结果卡在 25/50/75 边界上。
+    row['equity_stratum'] = None
+    # 分位名次是抑制前的风险排序键。留下它就能把公开名单重新排回风险顺序。
+    row['percentile_rank'] = None
+    for field in _VI_RECONSTRUCTABLE_SCORE_FIELDS:
+        row[field] = None
+    # 原始 RiskScore = RR×VI×Baseline。公开字段 risk_score 取的是 normalized_score。
+    row['risk_score'] = None
+    _null_suppressed_decomposition(row)
+    components = row.get('components')
+    if isinstance(components, dict):
+        for field in ('vulnerability_index', 'excess_risk_score', 'baseline_rate'):
+            components[field] = None
+    _null_suppressed_derived_heat_fields(row)
+    _null_suppressed_public_risk_fields(row)
+
+
+def _public_ranking_order_key(row):
+    """抑制行只按社区名排。仍公开的行按风险指数，同分再按名称。"""
+    name = str(row.get('community') or '')
+    if row.get('suppressed'):
+        return (1, name)
+    risk = row.get('risk_index')
+    if not _is_real_number(risk):
+        risk = 0.0
+    return (0, -float(risk), name)
+
+
+def _order_public_risk_lists(rankings, map_data, layers):
+    """有抑制行时，公开顺序不能再沿用综合风险名次。"""
+    if not rankings or not any(row.get('suppressed') for row in rankings):
+        return
+    rankings.sort(key=_public_ranking_order_key)
+    for idx, row in enumerate(rankings, start=1):
+        row['rank'] = idx
+    order = {row.get('community'): idx for idx, row in enumerate(rankings)}
+
+    features = (map_data or {}).get('features')
+    if isinstance(features, list):
+        features.sort(
+            key=lambda feature: order.get(
+                (feature.get('properties') or {}).get('name'),
+                len(order),
+            )
+        )
+    for entries in (layers or {}).values():
+        if not isinstance(entries, list):
+            continue
+        entries.sort(
+            key=lambda entry: order.get(
+                entry.get('community') if isinstance(entry, dict) else None,
+                len(order),
+            )
+        )
+
+
+def _scrub_suppressed_quartile_risk(quartile_rows, strata_map):
+    """分位人数、均值和高热风险计数只保留未抑制社区。
+
+    只要有抑制行，没有可见成员的分位一律写成同一空档（人数 0、均值 None）。
+    只把“原先有人、后来被抑制”的那一档改成 None，会和本来就是空档的 0 分对上，
+    从而指出被抑制社区落在哪一分位。
+    """
+    members_by_stratum = strata_map or {}
+    any_suppressed = any(
+        isinstance(row, dict) and row.get('suppressed')
+        for members in members_by_stratum.values()
+        for row in members or []
+    )
+    if not any_suppressed:
+        return
+    for quartile in quartile_rows or []:
+        members = members_by_stratum.get(quartile.get('stratum'), [])
+        visible = [
+            row for row in members
+            if isinstance(row, dict) and not row.get('suppressed')
+        ]
+        visible_scores = [
+            float(row['risk_index'])
+            for row in visible
+            if _is_real_number(row.get('risk_index'))
+        ]
+        quartile['count'] = len(visible)
+        quartile['avg_risk_index'] = (
+            round(float(np.mean(visible_scores)), 1) if visible_scores else None
+        )
+        uncertainty_values = [
+            float(row['uncertainty_index'])
+            for row in visible
+            if _is_real_number(row.get('uncertainty_index'))
+        ]
+        quartile['avg_uncertainty'] = (
+            round(float(np.mean(uncertainty_values)), 1) if uncertainty_values else None
+        )
+        quartile['high_heatrisk_count'] = sum(
+            1
+            for row in visible
+            if _is_real_number(row.get('heatrisk_level')) and int(row['heatrisk_level']) >= 3
+        )
+
+
+def _empty_impact_matrix_counts():
+    return {
+        impact: {likelihood: 0 for likelihood in _IMPACT_MATRIX_LEVELS}
+        for impact in _IMPACT_MATRIX_LEVELS
+    }
+
+
+def _public_risk_aggregates(rankings):
+    """热风险、热点、不确定度中位数和矩阵只统计未抑制行。
+
+    全部抑制时各计数为 0、中位数为 None，不能等于被抑制社区的精确档位。
+    """
+    heatrisk_counts = {str(level): 0 for level in range(5)}
+    hotspot_counts = {label: 0 for label in _HOTSPOT_COUNT_LABELS}
+    uncertainty_values = []
+    matrix_counts = _empty_impact_matrix_counts()
+    for row in rankings or []:
+        if not isinstance(row, dict) or row.get('suppressed'):
+            continue
+        level = row.get('heatrisk_level')
+        if _is_real_number(level):
+            level_key = str(int(level))
+            heatrisk_counts[level_key] = heatrisk_counts.get(level_key, 0) + 1
+        hotspot_label = row.get('hotspot_category')
+        if isinstance(hotspot_label, str) and hotspot_label:
+            hotspot_counts[hotspot_label] = hotspot_counts.get(hotspot_label, 0) + 1
+        uncertainty = row.get('uncertainty_index')
+        if _is_real_number(uncertainty):
+            uncertainty_values.append(float(uncertainty))
+        impact_bucket = row.get('impact_bucket')
+        likelihood_bucket = row.get('likelihood_bucket')
+        impact_row = matrix_counts.get(impact_bucket)
+        if isinstance(impact_row, dict) and likelihood_bucket in impact_row:
+            impact_row[likelihood_bucket] += 1
+    if uncertainty_values:
+        median_uncertainty = round(float(np.median(uncertainty_values)), 1)
+    else:
+        median_uncertainty = None
+    return heatrisk_counts, hotspot_counts, median_uncertainty, matrix_counts
+
+
+def _public_priority_rows(priority_rows, hidden_names):
+    """公开优先名单不收录抑制社区，避免沿用抑制前的风险顺序和阈值文案。"""
+    hidden_names = set(hidden_names or [])
+    published = []
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get('community') in hidden_names or row.get('suppressed'):
+            row['recommended_action'] = None
+            row['svi_percentile'] = None
+            row['equity_stratum'] = None
+            row['risk_index'] = None
+            row['heatrisk_level'] = None
+            row['uncertainty_index'] = None
+            continue
+        published.append(row)
+    return published
+
+
+def _republish_visible_relative_index(rankings, hidden_names):
+    """相对指数只在仍公开的 RiskScore 上重算，避免用全体均值减出被抑制的 VI。"""
+    hidden_names = set(hidden_names or [])
+    visible = [
+        row for row in rankings
+        if row.get('community') not in hidden_names and _is_real_number(row.get('risk_score'))
+    ]
+    if not visible:
+        return
+    scores = np.array([float(row['risk_score']) for row in visible], dtype=float)
+    mean_score = float(np.mean(scores)) if scores.size else 0.0
+    for row, score in zip(visible, scores):
+        row['relative_index'] = (
+            round((float(score) / mean_score * 100.0), 1) if mean_score > 0 else 100.0
+        )
+
+
+def _public_vulnerability_sort_key(item):
+    """只比较裁剪后的脆弱性指数。缺失值并列，避免用原名次泄漏。"""
+    vi = item.get('vulnerability_index')
+    if vi is None:
+        return (1, 0.0)
+    try:
+        return (0, -float(vi))
+    except (TypeError, ValueError):
+        return (1, 0.0)
 
 
 class CommunityRiskService:
     """社区风险评估服务"""
-    
+
     def __init__(self):
         # 风险分数归一化参数（使用“超额风险”避免全量顶格）
         self.excess_score_efold = self._read_float_env(
@@ -64,10 +548,10 @@ class CommunityRiskService:
             'heat_island_index': 0.5,   # 热岛效应权重
             'medical_accessibility': -0.3  # 医疗可达性权重（负向）
         }
-        
+
         # 社区敏感性参数（v_c）
         self.community_sensitivity = {}
-        
+
         # 加载社区数据
         self._load_community_profiles()
 
@@ -406,7 +890,7 @@ class CommunityRiskService:
         summary['total_records'] = total_records
         summary['unmatched_records'] = unmatched_records
         return summary
-    
+
     def _load_community_profiles(self):
         """加载社区档案数据。
 
@@ -454,6 +938,12 @@ class CommunityRiskService:
                     'chronic_disease_ratio': comm.chronic_disease_ratio or 0.15,
                     'vulnerability_index': comm.vulnerability_index,
                     'risk_level': comm.risk_level,
+                    # 模型仍使用上面的代理填充值；公开小样本判断只看数据库原列。
+                    'raw_population': comm.population,
+                    'raw_elderly_ratio': comm.elderly_ratio,
+                    'raw_chronic_disease_ratio': comm.chronic_disease_ratio,
+                    'raw_vulnerability_index': comm.vulnerability_index,
+                    'raw_risk_level': comm.risk_level,
 
                     # 数据库尚无这些实测字段，暂用稳定中性代理；接入真实数据后应直接替换。
                     'green_space_ratio': proxy['green_space_ratio'],
@@ -478,7 +968,7 @@ class CommunityRiskService:
                 'message': 'Community 表当前无法读取，本次不生成社区风险排名。',
             }
             current_app.logger.exception('Community 表查询或档案加载失败')
-    
+
     def _setup_default_communities(self):
         """设置默认社区配置"""
         coords_map = {}
@@ -498,7 +988,7 @@ class CommunityRiskService:
             {'name': '谭家新村', 'population': 145, 'elderly_ratio': 0.35, 'chronic_disease_ratio': 0.09},
             {'name': '新屋汪家', 'population': 92, 'elderly_ratio': 0.48, 'chronic_disease_ratio': 0.16},
         ]
-        
+
         for i, comm in enumerate(default_communities):
             coords = coords_map.get(comm['name']) if coords_map else None
             proxy = self._stable_proxy_profile(comm['name'])
@@ -523,16 +1013,16 @@ class CommunityRiskService:
                 'medical_accessibility': proxy['medical_accessibility'],
                 'baseline_visits': self._estimate_baseline_visits(comm['population'])
             }
-    
+
     def calculate_vulnerability_index(self, community_data):
         """
         计算社区脆弱性指数 (Vulnerability Index)
-        
+
         公式: VI_c = 1 + a*老龄率 + b*慢病率 - d*绿地率 + e*热岛指数 - f*医疗可达性
-        
+
         参数:
         - community_data: 社区数据字典
-        
+
         返回:
         - vi: 脆弱性指数（>1表示比平均更脆弱）
         - breakdown: 各因子贡献分解
@@ -543,7 +1033,7 @@ class CommunityRiskService:
         green_ratio = community_data.get('green_space_ratio', 0.1)
         heat_island = community_data.get('heat_island_index', 0.5)
         medical_access = community_data.get('medical_accessibility', 0.5)
-        
+
         # 计算各因子贡献
         breakdown = {
             'elderly_contribution': self.vi_weights['elderly_ratio'] * elderly_ratio,
@@ -552,15 +1042,15 @@ class CommunityRiskService:
             'heat_island_contribution': self.vi_weights['heat_island_index'] * heat_island,
             'medical_contribution': self.vi_weights['medical_accessibility'] * medical_access
         }
-        
+
         # 计算VI
         vi = 1.0
         for contribution in breakdown.values():
             vi += contribution
-        
+
         # 确保VI >= 0.5
         vi = max(0.5, vi)
-        
+
         # 确定脆弱性等级
         if vi >= 1.5:
             level = '高脆弱性'
@@ -571,7 +1061,7 @@ class CommunityRiskService:
         else:
             level = '低脆弱性'
             color = 'success'
-        
+
         return {
             'vulnerability_index': round(vi, 3),
             'level': level,
@@ -581,34 +1071,34 @@ class CommunityRiskService:
                             f'主要因素：老龄率贡献{breakdown["elderly_contribution"]:.2f}，'
                             f'慢病率贡献{breakdown["chronic_contribution"]:.2f}'
         }
-    
+
     def calculate_community_risk_score(self, community_name, weather_rr, target_date=None):
         """
         计算社区风险得分
-        
+
         公式: RiskScore_c(t) = MacroRR(t) × VI_c × BaselineRate_c
-        
+
         参数:
         - community_name: 社区名称
         - weather_rr: 宏观天气相对风险
         - target_date: 目标日期
-        
+
         返回:
         - risk_score: 风险得分
         - details: 详细信息
         """
         if community_name not in self.community_profiles:
             return {'error': f'社区 {community_name} 未找到'}
-        
+
         profile = self.community_profiles[community_name]
-        
+
         # 计算VI
         vi_result = self.calculate_vulnerability_index(profile)
         vi = vi_result['vulnerability_index']
-        
+
         # 获取基线门诊率
         baseline_rate = profile.get('baseline_visits', 5)
-        
+
         # 标准化输入RR，避免非数值污染
         try:
             weather_rr = float(weather_rr)
@@ -637,7 +1127,7 @@ class CommunityRiskService:
             'efold': self.excess_score_efold,
             'hazard': normalized_score,
         }
-        
+
         # 确定风险等级
         if normalized_score >= self.risk_level_thresholds['high']:
             risk_level = '高风险'
@@ -648,7 +1138,7 @@ class CommunityRiskService:
         else:
             risk_level = '低风险'
             color = 'success'
-        
+
         return {
             'community': community_name,
             'risk_score': round(risk_score, 2),
@@ -667,7 +1157,7 @@ class CommunityRiskService:
             'elderly_ratio': profile.get('elderly_ratio', 0),
             'expected_excess_visits': round(excess_risk_score, 1)
         }
-    
+
     def generate_community_risk_map(self, weather_data, target_date=None, window_days=30, disease_filter='', community_scope=None):
         """
         生成社区风险地图数据（学术增强版）。
@@ -898,14 +1388,8 @@ class CommunityRiskService:
         else:
             burden_pct = {}
 
-        matrix_impact_levels = ['low', 'medium', 'high', 'very_high']
-        matrix_likelihood_levels = ['low', 'medium', 'high', 'very_high']
-        matrix_counts = {
-            impact: {likelihood: 0 for likelihood in matrix_likelihood_levels}
-            for impact in matrix_impact_levels
-        }
-        impact_rank = {name: idx + 1 for idx, name in enumerate(matrix_impact_levels)}
-        likelihood_rank = {name: idx + 1 for idx, name in enumerate(matrix_likelihood_levels)}
+        impact_rank = {name: idx + 1 for idx, name in enumerate(_IMPACT_MATRIX_LEVELS)}
+        likelihood_rank = {name: idx + 1 for idx, name in enumerate(_IMPACT_MATRIX_LEVELS)}
 
         for item in community_risks:
             name = item['community']
@@ -949,7 +1433,6 @@ class CommunityRiskService:
                     likelihood_score -= 10.0
                 likelihood_score = float(np.clip(likelihood_score, 0.0, 100.0))
                 likelihood_bucket = self._to_four_level_bucket(likelihood_score)
-                matrix_counts[impact_bucket][likelihood_bucket] += 1
                 matrix_score = impact_rank[impact_bucket] * likelihood_rank[likelihood_bucket]
             else:
                 likelihood_bucket = None
@@ -1031,27 +1514,6 @@ class CommunityRiskService:
             'type': 'FeatureCollection',
             'features': geojson_features
         }
-
-        management_suggestions = self._generate_management_suggestions(rankings[:5], weather_data)
-
-        heatrisk_counts = {str(level): 0 for level in range(5)}
-        hotspot_counts = {
-            '热点(99%)': 0,
-            '热点(95%)': 0,
-            '冷点(99%)': 0,
-            '冷点(95%)': 0,
-            '无显著': 0,
-            '样本不足': 0
-        }
-        uncertainty_values = []
-        for row in rankings:
-            level_key = str(int(row.get('heatrisk_level', 0)))
-            heatrisk_counts[level_key] = heatrisk_counts.get(level_key, 0) + 1
-            hotspot_label = row.get('hotspot_category', '无显著')
-            hotspot_counts[hotspot_label] = hotspot_counts.get(hotspot_label, 0) + 1
-            if row.get('uncertainty_index') is not None:
-                uncertainty_values.append(float(row['uncertainty_index']))
-        median_uncertainty = float(np.median(uncertainty_values)) if uncertainty_values else None
 
         data_coverage_ratio = (
             medical_summary['matched_records'] / medical_summary['total_records']
@@ -1159,7 +1621,29 @@ class CommunityRiskService:
                 'uncertainty_index': round(float(row.get('uncertainty_index') or 0.0), 1),
                 'recommended_action': action
             })
+        model_risk_weights = {}
+        if rankings:
+            raw_weights = rankings[0].get('risk_weights')
+            if isinstance(raw_weights, dict):
+                model_risk_weights = dict(raw_weights)
+        case_counts_hidden = self._apply_case_count_k_anonymity(rankings)
+        hidden_names = self._apply_ranking_demographic_suppression(rankings, map_data)
+        self._redact_suppressed_vulnerability_outputs(layers, priority_rows, hidden_names)
+        _scrub_suppressed_quartile_risk(quartile_rows, strata_map)
+        _order_public_risk_lists(rankings, map_data, layers)
+        priority_rows = _public_priority_rows(priority_rows, hidden_names)
         equity_priority_count = len(priority_rows)
+        (
+            heatrisk_counts,
+            hotspot_counts,
+            median_uncertainty,
+            matrix_counts,
+        ) = _public_risk_aggregates(rankings)
+        visible_rankings = [row for row in rankings if not row.get('suppressed')]
+        management_suggestions = self._generate_management_suggestions(
+            visible_rankings[:5],
+            weather_data,
+        )
 
         return {
             'map_data': map_data,
@@ -1169,26 +1653,40 @@ class CommunityRiskService:
                     'community': row['community'],
                     'latitude': row.get('latitude'),
                     'longitude': row.get('longitude'),
-                    'risk_score': row['normalized_score'],
-                    'risk_level': row['risk_level'],
-                    'population': row['population'],
+                    'risk_score': None if row.get('suppressed') else row.get('normalized_score'),
+                    'risk_level': None if row.get('suppressed') else row['risk_level'],
+                    'population': row.get('population'),
                     'elderly_ratio': row.get('elderly_ratio'),
                     'chronic_disease_ratio': row.get('chronic_disease_ratio'),
-                    'vulnerability_index': row['components'].get('vulnerability_index'),
-                    'expected_excess_visits': row['expected_excess_visits'],
-                    'relative_index': row.get('relative_index', 100.0),
-                    'percentile_rank': row.get('percentile_rank', 0.0),
-                    'risk_index': row.get('risk_index', row.get('normalized_score', 0.0)),
-                    'weather_hazard_score': row.get('weather_hazard_score', row.get('normalized_score', 0.0)),
+                    'vulnerability_index': row.get('vulnerability_index'),
+                    'expected_excess_visits': (
+                        None if row.get('suppressed') else row.get('expected_excess_visits')
+                    ),
+                    'relative_index': (
+                        None if row.get('suppressed') else row.get('relative_index', 100.0)
+                    ),
+                    'percentile_rank': None if row.get('suppressed') else row.get('percentile_rank', 0.0),
+                    'risk_index': (
+                        None if row.get('suppressed')
+                        else row.get('risk_index', row.get('normalized_score', 0.0))
+                    ),
+                    'weather_hazard_score': (
+                        None if row.get('suppressed')
+                        else row.get('weather_hazard_score', row.get('normalized_score', 0.0))
+                    ),
                     'historical_component_available': row.get('historical_component_available', False),
-                    'burden_percentile': row.get('burden_percentile'),
-                    'uncertainty_penalty': row.get('uncertainty_penalty', 1.0),
-                    'risk_weights': row.get('risk_weights', {}),
+                    'burden_percentile': None if row.get('suppressed') else row.get('burden_percentile'),
+                    'uncertainty_penalty': (
+                        None if row.get('suppressed') else row.get('uncertainty_penalty', 1.0)
+                    ),
+                    'risk_weights': (
+                        None if row.get('suppressed') else (row.get('risk_weights') or {})
+                    ),
                     'risk_contributions': row.get('risk_contributions', {}),
                     'hazard_formula': row.get('hazard_formula', {}),
-                    'heatrisk_level': row.get('heatrisk_level', 0),
-                    'heatrisk_label': row.get('heatrisk_label', '最小'),
-                    'heatrisk_color': row.get('heatrisk_color', '#16a34a'),
+                    'heatrisk_level': None if row.get('suppressed') else row.get('heatrisk_level', 0),
+                    'heatrisk_label': None if row.get('suppressed') else row.get('heatrisk_label', '最小'),
+                    'heatrisk_color': None if row.get('suppressed') else row.get('heatrisk_color', '#16a34a'),
                     'svi_percentile': row.get('svi_percentile', 0.0),
                     'theme_scores': row.get('theme_scores', {}),
                     'observed_cases': row.get('observed_cases'),
@@ -1198,35 +1696,47 @@ class CommunityRiskService:
                     'ci_high': row.get('ci_high'),
                     'smoothed_sir': row.get('smoothed_sir'),
                     'probability_exceed_baseline': row.get('probability_exceed_baseline'),
-                    'certainty': row.get('certainty', 'unavailable'),
-                    'uncertainty_index': row.get('uncertainty_index'),
-                    'hotspot_category': row.get('hotspot_category', '数据不足'),
-                    'hotspot_z': row.get('hotspot_z'),
-                    'hotspot_p': row.get('hotspot_p'),
-                    'impact_bucket': row.get('impact_bucket', 'low'),
-                    'likelihood_bucket': row.get('likelihood_bucket', 'low'),
-                    'matrix_score': row.get('matrix_score', 1),
+                    'suppressed': bool(row.get('suppressed')),
+                    'stats_suppressed': bool(row.get('stats_suppressed')),
+                    'stats_redacted': bool(row.get('stats_redacted')),
+                    'certainty': None if row.get('suppressed') else row.get('certainty', 'unavailable'),
+                    'uncertainty_index': None if row.get('suppressed') else row.get('uncertainty_index'),
+                    'hotspot_category': (
+                        None if row.get('suppressed') else row.get('hotspot_category', '数据不足')
+                    ),
+                    'hotspot_z': None if row.get('suppressed') else row.get('hotspot_z'),
+                    'hotspot_p': None if row.get('suppressed') else row.get('hotspot_p'),
+                    'impact_bucket': None if row.get('suppressed') else row.get('impact_bucket', 'low'),
+                    'likelihood_bucket': (
+                        None if row.get('suppressed') else row.get('likelihood_bucket', 'low')
+                    ),
+                    'matrix_score': None if row.get('suppressed') else row.get('matrix_score', 1),
                     'equity_stratum': row.get('equity_stratum', 'Q1')
                 }
                 for row in rankings
             ],
             'summary': {
                 'total_communities': len(rankings),
-                'high_risk_count': sum(1 for row in rankings if row['risk_level'] == '高风险'),
-                'medium_risk_count': sum(1 for row in rankings if row['risk_level'] == '中风险'),
-                'low_risk_count': sum(1 for row in rankings if row['risk_level'] == '低风险'),
-                'total_expected_excess': sum(row['expected_excess_visits'] for row in rankings),
+                'high_risk_count': sum(1 for row in visible_rankings if row.get('risk_level') == '高风险'),
+                'medium_risk_count': sum(1 for row in visible_rankings if row.get('risk_level') == '中风险'),
+                'low_risk_count': sum(1 for row in visible_rankings if row.get('risk_level') == '低风险'),
+                'total_expected_excess': _sum_published_excess(rankings),
                 'analysis_date': str(target_date),
                 'window_days': analysis_days,
                 'disease_filter': disease_filter or '',
-                'matched_records': medical_summary['matched_records'],
-                'total_records': medical_summary['total_records'],
-                'unmatched_records': medical_summary['unmatched_records'],
+                'matched_records': None if case_counts_hidden else medical_summary['matched_records'],
+                'total_records': None if case_counts_hidden else medical_summary['total_records'],
+                'unmatched_records': None if case_counts_hidden else medical_summary['unmatched_records'],
+                'suppressed': any(bool(row.get('suppressed')) for row in rankings),
                 'historical_component_available': historical_component_available,
-                'risk_weights': rankings[0].get('risk_weights', {}) if rankings else {},
-                'data_coverage_ratio': round(data_coverage_ratio, 4) if data_coverage_ratio is not None else None,
-                'baseline_rate_per_person_day': round(baseline_rate_per_person_day, 8) if baseline_rate_per_person_day is not None else None,
-                'median_uncertainty_index': round(median_uncertainty, 1) if median_uncertainty is not None else None,
+                'risk_weights': model_risk_weights,
+                'data_coverage_ratio': None if case_counts_hidden else (
+                    round(data_coverage_ratio, 4) if data_coverage_ratio is not None else None
+                ),
+                'baseline_rate_per_person_day': None if case_counts_hidden else (
+                    round(baseline_rate_per_person_day, 8) if baseline_rate_per_person_day is not None else None
+                ),
+                'median_uncertainty_index': median_uncertainty,
                 'heatrisk_counts': heatrisk_counts,
                 'hotspot_counts': hotspot_counts,
                 'equity_priority_count': equity_priority_count
@@ -1237,8 +1747,8 @@ class CommunityRiskService:
                 'lag_temperatures_used': len(lag_temperatures) if lag_temperatures else 0
             },
             'impact_likelihood_matrix': {
-                'impact_levels': matrix_impact_levels,
-                'likelihood_levels': matrix_likelihood_levels,
+                'impact_levels': list(_IMPACT_MATRIX_LEVELS),
+                'likelihood_levels': list(_IMPACT_MATRIX_LEVELS),
                 'counts': matrix_counts
             },
             'layers': layers,
@@ -1279,13 +1789,13 @@ class CommunityRiskService:
             ],
             'management_suggestions': management_suggestions
         }
-    
+
     def _generate_management_suggestions(self, high_risk_communities, weather_data):
         """生成管控建议（医生端）"""
         suggestions = []
-        
+
         temp = weather_data.get('temperature', 20)
-        
+
         # 资源调度建议
         if len(high_risk_communities) >= 3:
             suggestions.append({
@@ -1294,17 +1804,20 @@ class CommunityRiskService:
                 'advice': f'建议向 {high_risk_communities[0]["community"]}、{high_risk_communities[1]["community"]} 等高风险社区增派医疗资源',
                 'target_communities': [c['community'] for c in high_risk_communities[:3]]
             })
-        
-        # 巡访建议
+
+        # 巡访建议。比率缺失表示该行已抑制，不把精确老龄率、慢病率或 VI 写进文本。
         for comm in high_risk_communities[:3]:
-            if comm.get('elderly_ratio', 0) > 0.4:
+            elderly_ratio = comm.get('elderly_ratio')
+            if isinstance(elderly_ratio, bool) or not isinstance(elderly_ratio, (int, float)):
+                continue
+            if elderly_ratio > 0.4:
                 suggestions.append({
                     'category': '健康巡访',
                     'priority': 'high',
-                    'advice': f'{comm["community"]} 老龄化程度高({comm["elderly_ratio"]*100:.0f}%)，建议加强独居老人巡访',
+                    'advice': f'{comm["community"]} 老龄化程度高({elderly_ratio*100:.0f}%)，建议加强独居老人巡访',
                     'target_communities': [comm['community']]
                 })
-        
+
         # 温度相关建议
         if temp > 32:
             suggestions.append({
@@ -1320,17 +1833,17 @@ class CommunityRiskService:
                 'advice': '低温天气，建议检查高风险社区供暖情况、关注独居老人',
                 'target_communities': [c['community'] for c in high_risk_communities]
             })
-        
-        # 门诊准备
-        total_excess = sum(c.get('expected_excess_visits', 0) for c in high_risk_communities)
-        if total_excess > 10:
+
+        # 门诊准备。抑制行的超额人次已置空，不能把 None 加进来，也不能写回建议文本。
+        total_excess = _sum_published_excess(high_risk_communities)
+        if total_excess is not None and total_excess > 10:
             suggestions.append({
                 'category': '门诊准备',
                 'priority': 'medium',
                 'advice': f'预计高风险社区额外增加约 {total_excess:.0f} 人次就诊，建议门诊做好准备',
                 'target_communities': [c['community'] for c in high_risk_communities]
             })
-        
+
         if not suggestions:
             suggestions.append({
                 'category': '常规管理',
@@ -1338,13 +1851,13 @@ class CommunityRiskService:
                 'advice': '各社区风险处于正常水平，保持常规健康管理工作',
                 'target_communities': []
             })
-        
+
         return suggestions
-    
+
     def update_community_sensitivity(self, community_name, heat_sensitivity=None, cold_sensitivity=None):
         """
         更新社区天气敏感性参数 (v_c)
-        
+
         这是模型中的关键参数，表示社区对高温/寒冷的额外敏感性
         """
         if community_name not in self.community_sensitivity:
@@ -1352,37 +1865,201 @@ class CommunityRiskService:
                 'heat_sensitivity': 1.0,
                 'cold_sensitivity': 1.0
             }
-        
+
         if heat_sensitivity is not None:
             self.community_sensitivity[community_name]['heat_sensitivity'] = heat_sensitivity
-        
+
         if cold_sensitivity is not None:
             self.community_sensitivity[community_name]['cold_sensitivity'] = cold_sensitivity
-    
-    def get_community_profile(self, community_name):
-        """获取社区档案"""
+
+    def _apply_case_count_k_anonymity(self, rankings):
+        """裁剪即将返回的村级就诊计数。风险指数已算完，这里只改公开字段。
+
+        只要有一个村的计数被抑制，其它村的 O/E、平滑 SIR 也会通过全局合计把那个整数算回来，
+        所以这些衍生字段一并清空。允许公布的村只保留 observed_cases 本身。
+        """
+        decisions = []
+        for row in rankings:
+            name = row.get('community')
+            profile = self.community_profiles.get(name) if name else None
+            decisions.append(_case_count_publication(name, _case_count_sample_size(profile)))
+        any_hidden = any(decision['hide'] for decision in decisions)
+        for row, decision in zip(rankings, decisions):
+            row['suppressed'] = decision['suppressed']
+            row['stats_suppressed'] = decision['suppressed']
+            row['stats_redacted'] = decision['redacted']
+            if not decision['hide'] and not any_hidden:
+                continue
+            saved_observed = row.get('observed_cases')
+            for field in _CASE_COUNT_FIELDS:
+                row[field] = None
+            if not decision['hide']:
+                row['observed_cases'] = saved_observed
+        return any_hidden
+
+    def _apply_ranking_demographic_suppression(self, rankings, map_data=None):
+        """按公开权限和样本阈值裁剪排名行上的人口学/脆弱性字段。
+
+        隐藏时置空并标记 suppressed，同时清掉可回推 VI 的公式分量、
+        超额就诊、危险度、相对指数、风险分解、热风险档、不确定度、热点 z 值、
+        公开风险档位（risk_level、color、likelihood_bucket、matrix_score、
+        impact_bucket、certainty），以及能反推 SVI 分位的贡献表和分位桶。
+        这些行会进入排名和综合预警 top_risk。授权且样本达到 k 时保留精确值；
+        若同时有抑制行，相对指数只按仍公开的 RiskScore 重算。
+        公开顺序不再使用被抑制社区的风险指数，只按社区名稳定排列。
+        """
+        profiles = self.community_profiles if isinstance(self.community_profiles, dict) else {}
+        hidden_names = set()
+        for row in rankings:
+            name = row.get('community')
+            profile = profiles.get(name) if name else None
+            if _ranking_demographics_hidden(name, _case_count_sample_size(profile)):
+                for field in _RANKING_DEMOGRAPHIC_FIELDS:
+                    row[field] = None
+                row['suppressed'] = True
+                _suppress_reconstructable_risk_fields(row)
+                if name:
+                    hidden_names.add(name)
+                continue
+            self._publish_ranking_demographics(row, profile)
+
+        if hidden_names:
+            _republish_visible_relative_index(rankings, hidden_names)
+
+        visible_relative = {
+            row.get('community'): row.get('relative_index')
+            for row in rankings
+            if row.get('community') not in hidden_names
+        }
+        for feature in (map_data or {}).get('features') or []:
+            props = feature.get('properties') or {}
+            name = props.get('name')
+            if name in hidden_names:
+                props['population'] = None
+                props['elderly_ratio'] = None
+                props['vi'] = None
+                props['percentile_rank'] = None
+                _null_suppressed_decomposition(props)
+                _clear_risk_contributions(props)
+                formula = props.get('hazard_formula')
+                if isinstance(formula, dict):
+                    formula['expression'] = _SUPPRESSED_HAZARD_FORMULA_NOTE
+                    for field in _HAZARD_FORMULA_RECONSTRUCTABLE_FIELDS:
+                        formula[field] = None
+                _null_suppressed_derived_heat_fields(props)
+                _null_suppressed_public_risk_fields(props)
+                continue
+            if name in visible_relative:
+                props['relative_index'] = visible_relative[name]
+        return hidden_names
+
+    @staticmethod
+    def _redact_suppressed_vulnerability_outputs(layers, priority_rows, hidden_names):
+        """抑制社区不再带 SVI、热风险档、不确定度或热点的精确派生量。"""
+        hidden_names = set(hidden_names or [])
+        if not hidden_names:
+            return
+        for entry in (layers or {}).get('vulnerability') or []:
+            if entry.get('community') in hidden_names:
+                entry['value'] = None
+        for entry in (layers or {}).get('risk_index') or []:
+            if entry.get('community') in hidden_names:
+                entry['value'] = None
+        for entry in (layers or {}).get('uncertainty') or []:
+            if isinstance(entry, dict) and entry.get('community') in hidden_names:
+                entry['value'] = None
+        for entry in (layers or {}).get('hotspot') or []:
+            if isinstance(entry, dict) and entry.get('community') in hidden_names:
+                entry['category'] = None
+                for field in ('value', 'z', 'hotspot_z', 'hotspot_p'):
+                    if field in entry:
+                        entry[field] = None
+        for priority in priority_rows or []:
+            if priority.get('community') in hidden_names:
+                priority['svi_percentile'] = None
+                priority['equity_stratum'] = None
+                priority['risk_index'] = None
+                priority['heatrisk_level'] = None
+                priority['uncertainty_index'] = None
+                priority['recommended_action'] = None
+
+    @staticmethod
+    def _publish_ranking_demographics(row, profile):
+        """授权且样本达标时，把档案里的精确人口学写回排名行。"""
+        profile = profile or {}
+        if 'raw_chronic_disease_ratio' in profile:
+            row['chronic_disease_ratio'] = profile.get('raw_chronic_disease_ratio')
+        elif profile.get('chronic_disease_ratio') is not None:
+            row['chronic_disease_ratio'] = profile.get('chronic_disease_ratio')
+        components = row.get('components') if isinstance(row.get('components'), dict) else {}
+        row['vulnerability_index'] = components.get('vulnerability_index')
+
+    def sanitize_community_public_stats(self, profile_dict):
+        """按当前请求权限和原始样本裁剪公开医疗统计。
+
+        无权查看时标记 stats_redacted；已授权但 raw_population 缺失或低于最小样本时
+        标记 stats_suppressed。两种情况都清空医疗衍生字段，并移除 raw_* 内部列。
+        """
+        profile = dict(profile_dict or {})
+        community_name = profile.get('name') or profile.get('community')
+        if not _can_view_community_health_stats(community_name):
+            redacted = True
+            suppressed = False
+            hide = True
+        else:
+            redacted = False
+            suppressed = _sample_below_minimum(
+                profile.get('raw_population'),
+                _community_min_sample_size(),
+            )
+            hide = suppressed
+        if hide:
+            for field in _PUBLIC_HEALTH_STAT_FIELDS:
+                profile[field] = None
+        profile['stats_redacted'] = redacted
+        profile['stats_suppressed'] = suppressed
+        for key in [key for key in profile if key.startswith('raw_')]:
+            del profile[key]
+        return profile
+
+    def get_community_profile(self, community_name, respect_access=False):
+        """获取社区档案。
+
+        默认 respect_access=False，无参调用保持离线算法测试的原返回。
+        公开接口传入 True 时才按权限与最小样本裁剪。
+        """
         if community_name in self.community_profiles:
             profile = self.community_profiles[community_name].copy()
             vi_result = self.calculate_vulnerability_index(profile)
             profile['vulnerability_details'] = vi_result
+            if respect_access:
+                return self.sanitize_community_public_stats(profile)
             return profile
         return None
-    
-    def get_all_communities(self):
-        """获取所有社区列表"""
+
+    def get_all_communities(self, respect_access=False):
+        """获取所有社区列表。respect_access=True 时只按裁剪后的脆弱性指数排序。"""
         communities = []
         for name, profile in self.community_profiles.items():
             vi_result = self.calculate_vulnerability_index(profile)
-            communities.append({
+            item = {
                 'name': name,
                 'population': profile.get('population', 0),
                 'elderly_ratio': profile.get('elderly_ratio', 0),
                 'chronic_disease_ratio': profile.get('chronic_disease_ratio', 0),
                 'vulnerability_index': vi_result['vulnerability_index'],
                 'vulnerability_level': vi_result['level']
-            })
-        
-        # 按VI排序
+            }
+            if respect_access:
+                item['raw_population'] = profile.get('raw_population')
+                item['vulnerability_details'] = vi_result
+                item['risk_level'] = profile.get('risk_level')
+                item['baseline_visits'] = profile.get('baseline_visits')
+            communities.append(item)
+
+        if respect_access:
+            sanitized = [self.sanitize_community_public_stats(item) for item in communities]
+            return sorted(sanitized, key=_public_vulnerability_sort_key)
         return sorted(communities, key=lambda x: x['vulnerability_index'], reverse=True)
 
 
@@ -1402,30 +2079,30 @@ if __name__ == '__main__':
     print("=" * 60)
     print("社区风险评估服务测试")
     print("=" * 60)
-    
+
     service = CommunityRiskService()
-    
+
     print("\n所有社区列表:")
     communities = service.get_all_communities()
     for comm in communities:
         print(f"  {comm['name']}: VI={comm['vulnerability_index']:.2f}, "
               f"老龄率={comm['elderly_ratio']*100:.0f}%, "
               f"级别={comm['vulnerability_level']}")
-    
+
     print("\n社区风险地图生成测试:")
     weather = {'temperature': 35, 'humidity': 80, 'aqi': 120}
     result = service.generate_community_risk_map(weather)
-    
+
     print(f"\n风险摘要:")
     print(f"  高风险社区: {result['summary']['high_risk_count']} 个")
     print(f"  中风险社区: {result['summary']['medium_risk_count']} 个")
     print(f"  低风险社区: {result['summary']['low_risk_count']} 个")
-    
+
     print("\n风险排名Top 3:")
     for r in result['rankings'][:3]:
         print(f"  {r['rank']}. {r['community']}: "
               f"风险分数={r['risk_score']}, {r['risk_level']}")
-    
+
     print("\n管控建议:")
     for s in result['management_suggestions']:
         print(f"  [{s['priority']}] {s['category']}: {s['advice']}")

@@ -54,6 +54,63 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def _default_sanitize_log_text(value):
+    return value
+
+
+sanitize_log_text = _default_sanitize_log_text
+
+
+def _install_logger_control_char_filter(install_control_char_filter, target):
+    try:
+        return install_control_char_filter(target)
+    except TypeError:
+        return None
+
+
+def _install_log_control_char_filter():
+    """兼容挂载 utils.log_safety 的控制字符清洗。"""
+    global sanitize_log_text
+    try:
+        from utils import log_safety
+    except ImportError:
+        return
+
+    imported_sanitize = getattr(log_safety, 'sanitize_log_text', None)
+    if callable(imported_sanitize):
+        sanitize_log_text = imported_sanitize
+
+    install_control_char_filter = getattr(log_safety, 'install_control_char_filter', None)
+    if not callable(install_control_char_filter):
+        return
+
+    root_logger = logging.getLogger()
+    log_filter = _install_logger_control_char_filter(install_control_char_filter, root_logger)
+    if logger is not root_logger:
+        _install_logger_control_char_filter(install_control_char_filter, logger)
+    if log_filter is None and not root_logger.handlers:
+        _install_logger_control_char_filter(install_control_char_filter, logger)
+        return
+
+    for handler in list(root_logger.handlers):
+        current_filters = getattr(handler, 'filters', ())
+        if log_filter is not None and any(
+            existing is log_filter or isinstance(existing, type(log_filter))
+            for existing in current_filters
+        ):
+            continue
+        if log_filter is not None:
+            handler.addFilter(log_filter)
+            continue
+        try:
+            install_control_char_filter(handler)
+        except (TypeError, AttributeError):
+            continue
+
+
+_install_log_control_char_filter()
+
 # 加载环境变量（.env）
 load_dotenv()
 
@@ -165,6 +222,11 @@ def init_db(app=None):
         if admin_username and admin_password:
             admin = User.query.filter_by(username=admin_username).first()
             if not admin:
+                from utils.validators import validate_password
+                valid, msg = validate_password(admin_password)
+                if not valid:
+                    logger.error("默认管理员密码不符合安全策略: %s", msg)
+                    raise ValueError(f"默认管理员密码不符合安全策略: {msg}")
                 admin = User(
                     username=admin_username,
                     email=admin_email,
@@ -173,7 +235,7 @@ def init_db(app=None):
                 admin.set_password(admin_password)
                 db.session.add(admin)
                 db.session.commit()
-            logger.info("默认管理员创建成功：%s", admin_username)
+                logger.info("默认管理员创建成功：%s", sanitize_log_text(admin_username))
         else:
             logger.warning("未设置默认管理员账号/密码，已跳过创建。")
     _DB_BOOTSTRAPPED = True

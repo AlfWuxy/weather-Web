@@ -20,6 +20,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -795,8 +796,54 @@ def village_points(coords_gcj: dict[str, Any], community_rows: Iterable[Any] = (
     return villages
 
 
+# 公开小样本不使用真实脆弱性分。同一中性分下再按村名稳定排序。
+_PUBLIC_NEUTRAL_STATIC_SCORE = 0
+
+
+def _heat_in_request() -> bool:
+    """离线调用没有请求上下文，保持真实排序。"""
+    try:
+        from flask import has_request_context
+
+        return bool(has_request_context())
+    except Exception:
+        return False
+
+
+def _heat_public_k_anon_rank(village: dict[str, Any]) -> bool:
+    """未授权的公开消费者，且该村健康统计因样本不足被 k-anon 抑制。"""
+    if not isinstance(village, dict) or not _heat_in_request():
+        return False
+    if _heat_can_view_health_stats(village.get("name")):
+        return False
+    return _heat_population_below_minimum(village.get("population"))
+
+
+def _heat_rank_key(village: dict[str, Any], daily_level: int, elderly_estimate, hazard_level: int):
+    """公开小样本使用中性分；授权请求仍按当日风险、静态分和老人数排序。"""
+    name = village["name"]
+    identifier = village.get("id", "")
+    if _heat_public_k_anon_rank(village):
+        neutral_daily = combine_daily_level(hazard_level, None)
+        return (-int(neutral_daily or 0), -_PUBLIC_NEUTRAL_STATIC_SCORE, 0, name, identifier)
+    elderly_key = -(elderly_estimate or 0)
+    if _heat_in_request() and not _heat_can_view_health_stats(village.get("name")):
+        elderly_key = 0
+    return (
+        -int(daily_level),
+        -(village.get("static_score") or 0),
+        elderly_key,
+        name,
+        identifier,
+    )
+
+
 def rank_villages(villages: list[dict[str, Any]], day: dict[str, Any] | None, limit: int = 5) -> list[dict[str, Any]]:
-    """按当日风险、静态风险分、老人数排序，生成巡访优先清单。"""
+    """按当日风险、静态风险分、老人数排序，生成巡访优先清单。
+
+    请求内的未授权消费者，若该村健康统计被 k-anon 抑制，则名次改用中性分，
+    再按村名稳定排序，避免泄露小样本村的相对脆弱性或病例数。授权用户保持真实排序。
+    """
     from services.heat_risk_poi_service import priority_exclusion_reason
 
     hazard = day.get("level") if day else None
@@ -820,12 +867,7 @@ def rank_villages(villages: list[dict[str, Any]], day: dict[str, Any] | None, li
         if village.get("facility_km") is not None and village["facility_km"] >= 3:
             reasons.append(f"距可达性参考点 {village['facility_km']:.1f} km")
         ranked.append({**village, "daily_level": daily, "elderly_estimate": elderly, "reasons": reasons})
-    ranked.sort(key=lambda v: (
-        -v["daily_level"],
-        -(v.get("static_score") or 0),
-        -(v.get("elderly_estimate") or 0),
-        v["name"], v.get("id", ""),
-    ))
+    ranked.sort(key=lambda v: _heat_rank_key(v, v["daily_level"], v.get("elderly_estimate"), hazard))
     return ranked[:limit] if limit else ranked
 
 
@@ -859,6 +901,88 @@ def _cooling_points(rows) -> list[dict[str, Any]]:
     return cooling_row_points(rows)
 
 
+_ELDERLY_COUNT_REASON = re.compile(r"约\s*\d+\s*位老人")
+
+
+def _heat_min_sample_size() -> int:
+    """与社区档案相同的最小样本。辅助未就绪时读 COMMUNITY_MIN_SAMPLE_SIZE。"""
+    try:
+        from core.community_access import community_min_sample_size
+    except ImportError:
+        community_min_sample_size = None
+    if community_min_sample_size is not None:
+        try:
+            return int(community_min_sample_size())
+        except Exception:
+            pass
+    default = 10
+    try:
+        from flask import current_app, has_app_context
+
+        if has_app_context():
+            return int(current_app.config.get("COMMUNITY_MIN_SAMPLE_SIZE", default))
+    except Exception:
+        return default
+    return default
+
+
+def _heat_can_view_health_stats(community_name) -> bool:
+    """当前请求能否查看该村医疗统计。辅助未就绪时按 patient_community_scope 判断。"""
+    try:
+        from core.community_access import can_view_community_health_stats
+    except ImportError:
+        can_view_community_health_stats = None
+    if can_view_community_health_stats is not None:
+        try:
+            return bool(can_view_community_health_stats(community_name))
+        except Exception:
+            return False
+    try:
+        from core.community_access import patient_community_scope
+
+        scope = patient_community_scope()
+    except Exception:
+        return False
+    if scope is None:
+        return True
+    try:
+        return bool(community_name) and community_name in scope
+    except TypeError:
+        return False
+
+
+def _heat_population_below_minimum(population) -> bool:
+    if population is None:
+        return True
+    try:
+        return float(population) < float(_heat_min_sample_size())
+    except (TypeError, ValueError):
+        return True
+
+
+def _heat_village_hides_health_stats(village: dict[str, Any]) -> bool:
+    if not _heat_can_view_health_stats(village.get("name")):
+        return True
+    return _heat_population_below_minimum(village.get("population"))
+
+
+def _redact_heat_village_health(village: dict[str, Any]) -> dict[str, Any]:
+    """未授权或小样本时只改副本上的人数，保留村点身份与其余原因。"""
+    if not isinstance(village, dict) or not _heat_village_hides_health_stats(village):
+        return village
+    copied = dict(village)
+    copied["population"] = None
+    copied["elderly_ratio"] = None
+    copied["elderly_estimate"] = None
+    reasons = copied.get("reasons")
+    if isinstance(reasons, list):
+        copied["reasons"] = [
+            reason for reason in reasons
+            if not (isinstance(reason, str) and _ELDERLY_COUNT_REASON.fullmatch(reason.strip()))
+        ]
+    return copied
+
+
 def daily_payload_for_request():
     """供路由调用：读取预报、村档案与避暑点，返回逐日工作台数据。"""
     from flask import current_app
@@ -887,8 +1011,18 @@ def daily_payload_for_request():
         cooling_rows = []
     villages = village_points(current_app.config.get("COMMUNITY_COORDS_GCJ") or {}, communities)
     points = build_poi_payload(villages, cooling_rows)
-    payload = build_daily_payload(forecast, prior, points["villages"], points["cooling_resources"], source, status, notice)
+    source_villages = list(points.get("villages") or [])
+    # 排序前保留人口。授权用户按真实风险排序；未授权小样本的中性名次由 rank_villages 处理。
+    payload = build_daily_payload(
+        forecast, prior, source_villages, points["cooling_resources"], source, status, notice,
+    )
     payload.update(points)
+    payload["villages"] = [_redact_heat_village_health(village) for village in source_villages]
+    for day in payload.get("priority") or []:
+        if isinstance(day, dict):
+            day["villages"] = [
+                _redact_heat_village_health(village) for village in (day.get("villages") or [])
+            ]
     return payload
 
 

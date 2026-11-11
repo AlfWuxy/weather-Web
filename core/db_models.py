@@ -7,6 +7,8 @@
 - 显示给用户时，使用 core.time_utils 中的本地时区转换函数
 - 避免使用已废弃的 lambda: datetime.now(timezone.utc)()（返回 naive datetime）
 """
+import hashlib
+import hmac
 from datetime import datetime, timezone
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -46,7 +48,37 @@ class User(UserMixin, db.Model):
             revoke_api_tokens(self.id)
 
     def check_password(self, password):
+        if not self.password_hash or not isinstance(password, str):
+            return False
         return check_password_hash(self.password_hash, password)
+
+    def password_session_stamp(self) -> str:
+        """HMAC-SHA256(SECRET_KEY, password_hash) 的前 16 位十六进制。
+
+        戳绑定服务器密钥。只拿到 password_hash 时不能离线拼出会话身份。
+        缺少应用上下文或 SECRET_KEY 时抛出 RuntimeError，禁止退回无密钥摘要。
+        """
+        from flask import current_app, has_app_context
+
+        if not has_app_context():
+            raise RuntimeError('会话密码戳需要应用上下文')
+        key = current_app.config.get('SECRET_KEY')
+        if isinstance(key, str):
+            key_bytes = key.encode('utf-8')
+        elif isinstance(key, (bytes, bytearray)):
+            key_bytes = bytes(key)
+        else:
+            raise RuntimeError('SECRET_KEY 未配置，无法计算会话密码戳')
+        if not key_bytes:
+            raise RuntimeError('SECRET_KEY 未配置，无法计算会话密码戳')
+        message = (self.password_hash or '').encode('utf-8')
+        return hmac.new(key_bytes, message, hashlib.sha256).hexdigest()[:16]
+
+    def get_id(self) -> str:
+        """会话身份含密码戳：改密或轮换 SECRET_KEY 后旧 session/remember 失效。"""
+        if self.id is None:
+            return ''
+        return f"{self.id}:{self.password_session_stamp()}"
 
 
 class MedicalRecord(db.Model):
@@ -257,7 +289,7 @@ class PairLink(db.Model):
     __tablename__ = 'pair_links'
     id = db.Column(db.Integer, primary_key=True)
     caregiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    short_code = db.Column(db.String(12), unique=True, nullable=False)
+    short_code = db.Column(db.String(12), unique=True, nullable=True)
     short_code_hash = db.Column(db.String(64))
     token_hash = db.Column(db.String(128), nullable=False)
     community_code = db.Column(db.String(100), nullable=False)
@@ -313,7 +345,7 @@ class Pair(db.Model):
     # 原始自由输入的地点（如“九江某乡镇”），用于地理编码与多地区支持
     location_query = db.Column(db.String(200))
     elder_code = db.Column(db.String(40), unique=True, nullable=False)
-    short_code = db.Column(db.String(12), unique=True, nullable=False)
+    short_code = db.Column(db.String(12), unique=True, nullable=True)
     short_code_hash = db.Column(db.String(64))
     short_code_expires_at = db.Column(db.DateTime)
     status = db.Column(db.String(20), default='active')  # active/inactive
@@ -485,6 +517,7 @@ class UsageEvent(db.Model):
         db.Index('ix_usage_events_user_id', 'user_id'),
         db.Index('ix_usage_events_event_type', 'event_type'),
         db.Index('ix_usage_events_created_at', 'created_at'),
+        db.Index('ix_usage_events_user_created_at', 'user_id', 'created_at'),
     )
 
 

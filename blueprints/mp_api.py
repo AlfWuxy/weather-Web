@@ -22,7 +22,7 @@ from core.db_models import FamilyMember, FamilyMemberProfile, Pair, User
 from core.extensions import db, limiter
 from core.security import hash_identifier
 from core.time_utils import utcnow
-from core.usage import log_usage_event, verify_api_token
+from core.usage import UsageQuotaError, log_usage_event, verify_api_token
 from core.input_limits import validate_event_meta
 from core.resource_budget import ResourceLimitError, setting
 from core.weather import get_weather_with_cache, is_qweather_online_weather
@@ -404,12 +404,20 @@ def events():
             if member:
                 resolved_member_id = member.id
 
-    log_usage_event(
-        event_type,
-        user_id=g.api_user_id,
-        pair_id=resolved_pair_id,
-        member_id=resolved_member_id,
-        source="miniprogram",
-        meta=meta,
-    )
+    try:
+        log_usage_event(
+            event_type,
+            user_id=g.api_user_id,
+            pair_id=resolved_pair_id,
+            member_id=resolved_member_id,
+            source="miniprogram",
+            meta=meta,
+            enforce_quota=True,
+        )
+    except UsageQuotaError:
+        return jsonify({
+            "success": False,
+            "error": "quota_exceeded",
+            "message": "事件上报配额已满，请稍后再试",
+        }), 429
     return jsonify({"success": True})

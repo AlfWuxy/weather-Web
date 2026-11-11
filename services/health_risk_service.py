@@ -436,14 +436,6 @@ class HealthRiskService:
                 ]
             }
 
-        profile_data = None
-        try:
-            from services.community_risk_service import get_community_service
-            profile_data = get_community_service().get_community_profile(community_name)
-        except Exception:
-            profile_data = None
-
-        community_row = Community.query.filter_by(name=community_name).first()
         population = None
         elderly_ratio = None
         chronic_ratio = None
@@ -457,40 +449,97 @@ class HealthRiskService:
         imputed_fields = []
         warnings = []
 
-        if community_row:
+        from flask import has_request_context
+        from core.community_access import can_view_community_health_stats, community_min_sample_size
+
+        min_sample = community_min_sample_size()
+        normalized_name = str(community_name).strip()
+        authorized = False
+        stats_restricted = False
+        if has_request_context():
+            try:
+                authorized = bool(can_view_community_health_stats(normalized_name))
+            except Exception:
+                authorized = False
+            stats_restricted = not authorized
+
+        # 请求内未授权时不查询社区表，避免把精确人口、比率、VI 和风险等级读进结果。
+        profile_data = None
+        community_row = None
+        if not stats_restricted:
+            try:
+                from services.community_risk_service import get_community_service
+                profile_data = get_community_service().get_community_profile(community_name)
+            except Exception:
+                profile_data = None
+            community_row = Community.query.filter_by(name=community_name).first()
+
+        def _population_number(value):
+            if value is None:
+                return None
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(number):
+                return None
+            return number
+
+        def _sample_confirmed(value):
+            number = _population_number(value)
+            return number is not None and number >= min_sample
+
+        if stats_restricted:
+            source = 'unauthorized_proxy'
+            source_label = '无权读取精确社区健康统计'
+            vulnerability_source = 'default_proxy'
+            vulnerability_source_label = '默认中性 VI 代理值'
+            population_source = 'missing'
+            imputed_fields.extend(['population', 'vulnerability_index'])
+            warnings.append('当前账号无权读取该社区精确健康统计，社区 VI 使用 45 分中性代理值。')
+        elif community_row:
             source = 'community_table'
             source_label = '社区表实时记录'
-            raw_population = int(self._to_float(community_row.population, 0.0))
-            if raw_population > 0:
-                population = raw_population
+            # 人口缺失或小于最小样本时，不能确认可公布的大样本。
+            # 这类记录不使用、也不返回人口、VI、老龄率和慢病率。
+            if _sample_confirmed(community_row.population):
+                population = int(_population_number(community_row.population))
                 population_source = 'community_table'
+                # 能进入这里的请求要么已授权，要么没有请求上下文。
+                # 老龄率、慢病率只在已授权请求中写入。
+                if authorized:
+                    if community_row.elderly_ratio is not None:
+                        elderly_ratio = self._clamp(self._to_float(community_row.elderly_ratio), 0.0, 1.0)
+                    if community_row.chronic_disease_ratio is not None:
+                        chronic_ratio = self._clamp(self._to_float(community_row.chronic_disease_ratio), 0.0, 1.0)
+                if community_row.vulnerability_index is not None:
+                    vulnerability_index = self._clamp(self._to_float(community_row.vulnerability_index), 0.0, 100.0)
+                    vulnerability_source = 'community_table'
+                    vulnerability_source_label = '社区表 VI'
+                    if community_row.risk_level:
+                        vulnerability_level = str(community_row.risk_level)
+                else:
+                    imputed_fields.append('vulnerability_index')
+                    warnings.append('社区表缺少 VI，当前使用 45 分中性代理值。')
             else:
                 imputed_fields.append('population')
                 warnings.append('社区表缺少有效人口，每千人负担无法计算。')
-            if community_row.elderly_ratio is not None:
-                elderly_ratio = self._clamp(self._to_float(community_row.elderly_ratio), 0.0, 1.0)
-            if community_row.chronic_disease_ratio is not None:
-                chronic_ratio = self._clamp(self._to_float(community_row.chronic_disease_ratio), 0.0, 1.0)
-            if community_row.vulnerability_index is not None:
-                vulnerability_index = self._clamp(self._to_float(community_row.vulnerability_index), 0.0, 100.0)
-                vulnerability_source = 'community_table'
-                vulnerability_source_label = '社区表 VI'
-                if community_row.risk_level:
-                    vulnerability_level = str(community_row.risk_level)
-            else:
                 imputed_fields.append('vulnerability_index')
-                warnings.append('社区表缺少 VI，当前使用 45 分中性代理值。')
+                if community_row.vulnerability_index is None:
+                    warnings.append('社区表缺少 VI，当前使用 45 分中性代理值。')
+                else:
+                    warnings.append('社区脆弱性使用 45 分中性代理值。')
         elif profile_data:
             source = 'bundled_profile'
             source_label = '内置社区档案'
-            raw_population = int(self._to_float(profile_data.get('population'), 0.0))
-            if raw_population > 0:
-                population = raw_population
+            if _sample_confirmed(profile_data.get('population')):
+                population = int(_population_number(profile_data.get('population')))
                 population_source = 'bundled_profile'
-            if profile_data.get('elderly_ratio') is not None:
-                elderly_ratio = self._clamp(self._to_float(profile_data.get('elderly_ratio')), 0.0, 1.0)
-            if profile_data.get('chronic_disease_ratio') is not None:
-                chronic_ratio = self._clamp(self._to_float(profile_data.get('chronic_disease_ratio')), 0.0, 1.0)
+                if authorized:
+                    if profile_data.get('elderly_ratio') is not None:
+                        elderly_ratio = self._clamp(self._to_float(profile_data.get('elderly_ratio')), 0.0, 1.0)
+                    if profile_data.get('chronic_disease_ratio') is not None:
+                        chronic_ratio = self._clamp(self._to_float(profile_data.get('chronic_disease_ratio')), 0.0, 1.0)
             imputed_fields.append('vulnerability_index')
             warnings.append('未匹配社区表 VI，当前使用 45 分中性代理值。')
         else:
@@ -511,7 +560,9 @@ class HealthRiskService:
             burden_score = default_burden_score
             burden_source = burden['reason']
             imputed_fields.append('burden_score')
-            if burden['reason'] == 'unavailable_query_failed':
+            if burden['reason'] == 'unavailable_not_authorized':
+                warnings.append('当前账号无权读取该社区近期精确就诊统计，模型采用中性负担基准（30分）。')
+            elif burden['reason'] == 'unavailable_query_failed':
                 warnings.append('30 日门诊记录查询失败，模型使用 30 分中性负担代理值。')
             else:
                 warnings.append('因人口数缺失，30 日每千人负担无法计算，模型使用 30 分中性负担代理值。')
@@ -544,6 +595,18 @@ class HealthRiskService:
         }
 
     def _community_recent_burden(self, community_name, population, window_days=30):
+        from flask import has_request_context
+        from core.community_access import can_view_community_health_stats, community_min_sample_size
+
+        normalized_name = str(community_name or '').strip()
+        if not (has_request_context() and can_view_community_health_stats(normalized_name)):
+            return {
+                'cases': None,
+                'per_1000': None,
+                'available': False,
+                'reason': 'unavailable_not_authorized'
+            }
+
         try:
             start_time = utcnow() - timedelta(days=max(7, int(window_days or 30)))
             query = MedicalRecord.query.filter(MedicalRecord.community == community_name)
@@ -557,10 +620,23 @@ class HealthRiskService:
                 'reason': 'unavailable_query_failed'
             }
 
-        pop = max(int(population or 0), 0)
-        if pop <= 0:
+        try:
+            pop = int(population or 0)
+        except (TypeError, ValueError):
+            pop = 0
+        min_sample = community_min_sample_size()
+        if pop < min_sample:
+            # 人口缺失或低于最小样本时，不能把精确就诊数写进 explain。
+            # cases == 0 仍原样返回，兼容人口缺失社区的授权查询。
+            if cases == 0:
+                return {
+                    'cases': 0,
+                    'per_1000': None,
+                    'available': False,
+                    'reason': 'unavailable_missing_population'
+                }
             return {
-                'cases': cases,
+                'cases': None,
                 'per_1000': None,
                 'available': False,
                 'reason': 'unavailable_missing_population'

@@ -102,7 +102,8 @@ def test_pair_management_can_create_pair(app, client):
         pair = Pair.query.filter_by(caregiver_id=user_id).first()
         assert pair is not None
         assert bool(pair.elder_code)
-        assert bool(pair.short_code)
+        assert pair.short_code is None
+        assert bool(pair.short_code_hash)
         assert pair.short_code_expires_at is not None
 
 

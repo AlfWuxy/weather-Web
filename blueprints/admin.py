@@ -5,13 +5,14 @@ import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
-from flask_login import current_user, login_required
+from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for
+from flask_login import current_user, login_required, login_user
 
 from core.extensions import db
 from core.audit import log_audit
 from core.db_models import Community, CoolingResource, HealthRiskAssessment, MedicalRecord, User, WeatherAlert
 from core.time_utils import utcnow
+from utils.log_safety import sanitize_log_text
 from utils.parsers import parse_bool, parse_float, parse_int
 from utils.validators import (
     sanitize_input, validate_age, validate_email, validate_gender, validate_password, validate_username
@@ -270,7 +271,11 @@ def admin_statistics():
         try:
             start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
         except ValueError as exc:
-            logger.warning("开始日期解析失败: %s, 错误: %s", start_date_str, exc)
+            logger.warning(
+                "开始日期解析失败: %s, 错误: %s",
+                sanitize_log_text(start_date_str),
+                sanitize_log_text(str(exc)),
+            )
             start_date = None
 
     if end_date_str:
@@ -278,7 +283,11 @@ def admin_statistics():
             end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
             end_date = end_date.replace(hour=23, minute=59, second=59)
         except ValueError as exc:
-            logger.warning("结束日期解析失败: %s, 错误: %s", end_date_str, exc)
+            logger.warning(
+                "结束日期解析失败: %s, 错误: %s",
+                sanitize_log_text(end_date_str),
+                sanitize_log_text(str(exc)),
+            )
             end_date = None
 
     # 应用时间筛选
@@ -569,6 +578,9 @@ def admin_edit_user(user_id):
             user.authorized_community = None
 
         db.session.commit()
+        if new_password and user.id == current_user.id:
+            login_user(user)
+            session.pop('_remember', None)
         flash('用户信息更新成功', 'success')
         return redirect(url_for('admin.admin_users'))
 

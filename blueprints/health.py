@@ -4,7 +4,7 @@ import json
 import logging
 from types import SimpleNamespace
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 from core.constants import CHRONIC_OPTIONS, RISK_TAG_OPTIONS
@@ -28,6 +28,8 @@ from utils.validators import sanitize_input, validate_gender
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('health', __name__)
+
+_HEALTH_DIARY_DAILY_MAX = 20
 
 
 def _empty_family_member():
@@ -82,6 +84,105 @@ def _render_family_member_form(member, profile=None, *, is_create_mode=False):
     )
 
 
+def _positive_int_config(key, default):
+    """读取正整数配置；缺失或非法时回到默认值。"""
+    raw = current_app.config.get(key, default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _request_wants_json():
+    """表单提交继续走 flash；只有明确的 JSON 请求才返回 JSON。"""
+    if request.is_json:
+        return True
+    accept = request.headers.get('Accept') or ''
+    return 'application/json' in accept and 'text/html' not in accept
+
+
+def _over_quota_response(message, endpoint):
+    """超限时拒绝。JSON 客户端收到 400，页面请求则 flash 后跳回。"""
+    logger.info(
+        'quota rejected user_id=%s endpoint=%s',
+        getattr(current_user, 'id', None),
+        endpoint,
+    )
+    if _request_wants_json():
+        return jsonify({
+            'success': False,
+            'ok': False,
+            'error': message,
+            'message': message,
+        }), 400
+    flash(message, 'error')
+    return redirect(url_for(endpoint))
+
+
+def _family_member_create_limit():
+    """单用户家庭成员上限。至少 20，配置更高时跟随 PAIR_MAX_PER_USER。"""
+    return max(20, _positive_int_config('PAIR_MAX_PER_USER', 20))
+
+
+def _family_member_quota_message(limit):
+    return f'家庭成员已达上限（最多 {limit} 位），请删除不再需要的成员后再添加。'
+
+
+def _family_member_quota_response():
+    """未超限返回 None，超限返回可直接 return 的响应。"""
+    limit = _family_member_create_limit()
+    count = FamilyMember.query.filter_by(user_id=current_user.id).count()
+    if count < limit:
+        return None
+    return _over_quota_response(_family_member_quota_message(limit), 'health.family_members')
+
+
+def _health_diary_total_limit():
+    return _positive_int_config('HEALTH_DIARY_MAX_PER_USER', 1000)
+
+
+def _health_diary_quota_response(entry_date):
+    """单日最多 20 条，且单用户总量不超过配置上限。未超限返回 None。"""
+    daily_count = HealthDiary.query.filter_by(
+        user_id=current_user.id,
+        entry_date=entry_date,
+    ).count()
+    if daily_count >= _HEALTH_DIARY_DAILY_MAX:
+        return _over_quota_response(
+            f'同一天最多记录 {_HEALTH_DIARY_DAILY_MAX} 条健康日记，请合并到已有记录或改日再记。',
+            'health.health_diary',
+        )
+
+    total_limit = _health_diary_total_limit()
+    total_count = HealthDiary.query.filter_by(user_id=current_user.id).count()
+    if total_count >= total_limit:
+        return _over_quota_response(
+            f'健康日记已达上限（最多 {total_limit} 条），请删除较早的记录后再添加。',
+            'health.health_diary',
+        )
+    return None
+
+
+def _medication_reminder_create_limit():
+    return _positive_int_config('MEDICATION_REMINDER_MAX_PER_USER', 100)
+
+
+def _medication_reminder_quota_message(limit):
+    return f'用药提醒已达上限（最多 {limit} 条），请删除不再使用的提醒后再添加。'
+
+
+def _medication_reminder_quota_response():
+    limit = _medication_reminder_create_limit()
+    count = MedicationReminder.query.filter_by(user_id=current_user.id).count()
+    if count < limit:
+        return None
+    return _over_quota_response(
+        _medication_reminder_quota_message(limit),
+        'health.medication_reminders',
+    )
+
+
 @bp.route('/family-members', methods=['GET', 'POST'], endpoint='family_members')
 @login_required
 def family_members():
@@ -100,8 +201,19 @@ def family_members():
             flash(error_message, 'error')
             return redirect(url_for('health.family_members'))
 
+        quota_response = _family_member_quota_response()
+        if quota_response is not None:
+            return quota_response
+
         db.session.add(member)
         db.session.flush()
+        member_limit = _family_member_create_limit()
+        if FamilyMember.query.filter_by(user_id=current_user.id).count() > member_limit:
+            db.session.rollback()
+            return _over_quota_response(
+                _family_member_quota_message(member_limit),
+                'health.family_members',
+            )
 
         profile = FamilyMemberProfile(
             member_id=member.id,
@@ -126,13 +238,17 @@ def family_members():
         profiles = FamilyMemberProfile.query.filter(FamilyMemberProfile.member_id.in_(member_ids)).all()
     profile_map = {p.member_id: p for p in profiles}
 
-    diary_entries = HealthDiary.query.filter_by(user_id=current_user.id).order_by(HealthDiary.entry_date.desc()).all()
+    diary_entries = HealthDiary.query.filter_by(user_id=current_user.id).order_by(
+        HealthDiary.entry_date.desc()
+    ).limit(365).all()
     last_diary_map = {}
     for entry in diary_entries:
         if entry.member_id and entry.member_id not in last_diary_map:
             last_diary_map[entry.member_id] = entry
 
-    reminders = MedicationReminder.query.filter_by(user_id=current_user.id).order_by(MedicationReminder.created_at.desc()).all()
+    reminders = MedicationReminder.query.filter_by(user_id=current_user.id).order_by(
+        MedicationReminder.created_at.desc()
+    ).limit(100).all()
     last_reminder_map = {}
     for reminder in reminders:
         if reminder.member_id and reminder.member_id not in last_reminder_map:
@@ -248,8 +364,19 @@ def family_member_new():
             flash(error_message, 'error')
             return _render_family_member_form(member, None, is_create_mode=True)
 
+        quota_response = _family_member_quota_response()
+        if quota_response is not None:
+            return quota_response
+
         db.session.add(member)
         db.session.flush()
+        member_limit = _family_member_create_limit()
+        if FamilyMember.query.filter_by(user_id=current_user.id).count() > member_limit:
+            db.session.rollback()
+            return _over_quota_response(
+                _family_member_quota_message(member_limit),
+                'health.family_members',
+            )
 
         profile = FamilyMemberProfile(member_id=member.id, **profile_payload)
         db.session.add(profile)
@@ -374,10 +501,10 @@ def family_member_detail(member_id):
 
     entries = HealthDiary.query.filter_by(user_id=current_user.id, member_id=member.id).order_by(
         HealthDiary.entry_date.desc()
-    ).all()
+    ).limit(365).all()
     reminders = MedicationReminder.query.filter_by(user_id=current_user.id, member_id=member.id).order_by(
         MedicationReminder.created_at.desc()
-    ).all()
+    ).limit(100).all()
     user_location = ensure_user_location_valid()
     weather_data, _ = get_weather_with_cache(user_location)
     weather_available = is_qweather_online_weather(weather_data)
@@ -423,6 +550,10 @@ def health_diary():
                 flash('无效的家庭成员', 'error')
                 return redirect(url_for('health.health_diary'))
 
+        quota_response = _health_diary_quota_response(entry_date)
+        if quota_response is not None:
+            return quota_response
+
         diary = HealthDiary(
             user_id=current_user.id,
             member_id=member_id,
@@ -432,12 +563,31 @@ def health_diary():
             notes=notes
         )
         db.session.add(diary)
+        db.session.flush()
+        total_limit = _health_diary_total_limit()
+        daily_count = HealthDiary.query.filter_by(
+            user_id=current_user.id,
+            entry_date=entry_date,
+        ).count()
+        total_count = HealthDiary.query.filter_by(user_id=current_user.id).count()
+        if daily_count > _HEALTH_DIARY_DAILY_MAX or total_count > total_limit:
+            db.session.rollback()
+            if daily_count > _HEALTH_DIARY_DAILY_MAX:
+                message = (
+                    f'同一天最多记录 {_HEALTH_DIARY_DAILY_MAX} 条健康日记，'
+                    '请合并到已有记录或改日再记。'
+                )
+            else:
+                message = f'健康日记已达上限（最多 {total_limit} 条），请删除较早的记录后再添加。'
+            return _over_quota_response(message, 'health.health_diary')
         db.session.commit()
         flash('健康日记已保存', 'success')
         return redirect(url_for('health.health_diary'))
 
     members = FamilyMember.query.filter_by(user_id=current_user.id).order_by(FamilyMember.created_at.desc()).all()
-    entries = HealthDiary.query.filter_by(user_id=current_user.id).order_by(HealthDiary.entry_date.desc()).all()
+    entries = HealthDiary.query.filter_by(user_id=current_user.id).order_by(
+        HealthDiary.entry_date.desc()
+    ).limit(365).all()
     member_map = {member.id: member.name for member in members}
 
     entry_dates = sorted({entry.entry_date for entry in entries if entry.entry_date})
@@ -484,6 +634,10 @@ def medication_reminders():
                 flash('无效的家庭成员', 'error')
                 return redirect(url_for('health.medication_reminders'))
 
+        quota_response = _medication_reminder_quota_response()
+        if quota_response is not None:
+            return quota_response
+
         triggers = {}
         triggers['high_temp'] = parse_float(request.form.get('high_temp'))
         triggers['low_temp'] = parse_float(request.form.get('low_temp'))
@@ -501,13 +655,21 @@ def medication_reminders():
             weather_triggers=json.dumps(triggers, ensure_ascii=False) if triggers else None
         )
         db.session.add(reminder)
+        db.session.flush()
+        reminder_limit = _medication_reminder_create_limit()
+        if MedicationReminder.query.filter_by(user_id=current_user.id).count() > reminder_limit:
+            db.session.rollback()
+            return _over_quota_response(
+                _medication_reminder_quota_message(reminder_limit),
+                'health.medication_reminders',
+            )
         db.session.commit()
         flash('用药提醒已添加', 'success')
         return redirect(url_for('health.medication_reminders'))
 
     reminders = MedicationReminder.query.filter_by(user_id=current_user.id).order_by(
         MedicationReminder.created_at.desc()
-    ).all()
+    ).limit(100).all()
     members = FamilyMember.query.filter_by(user_id=current_user.id).order_by(FamilyMember.created_at.desc()).all()
     member_map = {m.id: m for m in members}
 

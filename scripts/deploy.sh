@@ -21,7 +21,7 @@ remote_exec "apt-get update && apt-get install -y python3 python3-pip python3-ve
 remote_exec "systemctl enable --now redis-server"
 remote_exec "set -eu; umask 077; test ! -L '$PROJECT_DIR'; install -d -o root -g '$APP_USER' -m 0750 '$PROJECT_DIR'"
 upload_files
-remote_exec "cd '$PROJECT_DIR' && python3 -m venv '$VENV_DIR' && '$VENV_DIR/bin/pip' install -r requirements.txt && '$VENV_DIR/bin/pip' install gunicorn"
+remote_exec "set -eu; [ ! -L '$VENV_DIR' ]; rm -rf -- '$VENV_DIR'; install -d -o '$APP_USER' -g '$APP_USER' -m 0700 '$VENV_DIR'; runuser -u '$APP_USER' -- env HOME='$VENV_DIR' python3 -m venv '$VENV_DIR'; runuser -u '$APP_USER' -- env HOME='$VENV_DIR' PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 '$VENV_DIR/bin/pip' install --require-hashes --only-binary=:all: -r '$PROJECT_DIR/requirements.txt'"
 
 # 新文件在写入任何秘密前即为0600，已有宽权限也在读取前纠正。
 remote_exec "set -eu; umask 077; python3 '$PROJECT_DIR/scripts/secure_environment.py' protect '$PROJECT_DIR/.env'; if [ ! -s '$PROJECT_DIR/.env' ]; then cat > '$PROJECT_DIR/.env' <<'ENV_DEFAULTS'

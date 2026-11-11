@@ -60,7 +60,7 @@ initialize_deploy_security() {
 remote_exec() { ssh "${SSH_ARGS[@]}" "$DEPLOY_LOGIN@$SERVER" "$1"; }
 
 upload_files() {
-    rsync -avz --safe-links --exclude '__pycache__' --exclude '*.pyc' \
+    rsync -rptvz --no-links --safe-links --exclude '__pycache__' --exclude '*.pyc' \
         --exclude 'instance' --exclude 'storage' --exclude 'logs' --exclude 'health_weather.db' \
         --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' \
         --exclude '.git' --exclude '.claude' --exclude '.superpowers' --exclude '.pytest_cache' \

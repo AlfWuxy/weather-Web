@@ -21,6 +21,7 @@
                     <div class="card-body p-4 p-md-5">
                         <form method="POST" action="{{ url_for('public.register') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="register_challenge" value="{{ register_challenge or '' }}">
 
                             {# 基础 #}
                             <div class="mb-3" style="font-size:.8rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; font-weight:600;">

@@ -42,6 +42,9 @@ limiter = Limiter(_limiter_key_func)
 def init_extensions(app):
     """Bind extensions to the Flask app."""
     db.init_app(app)
+    # 必须在第一次请求事务开始前挂上，否则当前根事务的 after_begin 已经错过。
+    from core.audit import register_audit_session_listeners
+    register_audit_session_listeners()
     login_manager.init_app(app)
     login_manager.login_view = 'public.login'
     login_manager.login_message = '请先登录'

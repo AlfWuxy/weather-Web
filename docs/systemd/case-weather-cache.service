@@ -4,7 +4,14 @@ After=network.target
 
 [Service]
 Type=oneshot
-User=root
+User=case-weather
+Group=case-weather
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/your-app/instance /opt/your-app/storage /opt/your-app/logs
 WorkingDirectory=/opt/your-app
 EnvironmentFile=/opt/your-app/.env
 Environment=PYTHONUNBUFFERED=1

@@ -68,7 +68,10 @@ def test_community_risk_page_has_academic_sections(admin_client):
 
 
 def test_community_risk_api_returns_extended_fields(admin_client, db_session):
+    from services.community_risk_cache import clear_local_community_risk_cache
+
     _seed_community_risk_data(db_session)
+    clear_local_community_risk_cache()
 
     response = admin_client.post(
         '/api/community/risk-map-v2',
@@ -94,6 +97,11 @@ def test_community_risk_api_returns_extended_fields(admin_client, db_session):
     assert 'rankings' in payload
     assert len(payload['rankings']) >= 1
     first = payload['rankings'][0]
+    assert first['population'] in {1200, 680, 540}
+    assert first['elderly_ratio'] is not None
+    assert first['chronic_disease_ratio'] is not None
+    assert first['vulnerability_index'] is not None
+    assert first['suppressed'] is False
     assert 'risk_index' in first
     assert 'weather_hazard_score' in first
     assert 'burden_percentile' in first

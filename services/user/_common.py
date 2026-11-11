@@ -30,8 +30,8 @@ RELAY_STAGE_LABELS = {
 }
 AUTO_ESCALATE_AFTER = timedelta(hours=2)
 AUTO_ESCALATE_STAGE = 'backup'
-DEFAULT_ACTION_TOKEN_TTL_DAYS = 90
-DEFAULT_SHORT_CODE_TTL_DAYS = 90
+DEFAULT_ACTION_TOKEN_TTL_DAYS = 7
+DEFAULT_SHORT_CODE_TTL_DAYS = 7
 
 CARE_ACTION_OPTIONS = [
     {'id': 'remind', 'label': '提醒'},
@@ -156,7 +156,7 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
         location_query=location_query,
         member_id=member_id,
         elder_code=_generate_elder_code(),
-        short_code=short_code,
+        short_code=None,
         short_code_hash=hash_short_code(short_code),
         short_code_expires_at=_short_code_expires_at(),
         status='active',
@@ -166,6 +166,8 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
     db.session.add(pair)
     # flush 使同事务内后续创建也纳入数量约束；提交仍由调用方控制。
     db.session.flush()
+    # 明文短码只活在当前进程，供当次响应写入会话后展示一次。
+    pair.issued_short_code = short_code
     return pair
 
 
@@ -176,35 +178,8 @@ def _derive_pair_action_token(record):
     return hash_identifier(f'pair-action-record:{record.pair_id}:{record.id}')
 
 
-def _create_pair_action_token(pair, flush=False):
-    """创建或复用行动链接 token，数据库始终只保存哈希。"""
-    if not pair or not getattr(pair, 'id', None):
-        raise ValueError('pair id is required')
-
-    now = utcnow()
-    reusable = PairActionToken.query.filter(
-        PairActionToken.pair_id == pair.id,
-        PairActionToken.revoked_at.is_(None),
-        PairActionToken.expires_at >= now,
-    ).order_by(PairActionToken.id.desc()).first()
-    if reusable:
-        token = _derive_pair_action_token(reusable)
-        expected_hash = hash_pair_token(token)
-        if (
-            token
-            and expected_hash
-            and reusable.token_hash
-            and secrets.compare_digest(expected_hash, reusable.token_hash)
-        ):
-            return reusable, token
-
-    # 清理已经失效的历史记录，避免长期运行后表持续增长。
-    PairActionToken.query.filter(
-        PairActionToken.pair_id == pair.id,
-        PairActionToken.expires_at < now,
-    ).delete(synchronize_session=False)
-
-    # 先写入一次性占位哈希取得记录 ID，再用 ID 派生可重建 token。
+def _issue_pair_action_token(pair, now, flush=False):
+    """写入一条新的行动令牌。数据库只保存哈希。"""
     placeholder = secrets.token_urlsafe(32)
     record = PairActionToken(
         pair_id=pair.id,
@@ -221,15 +196,64 @@ def _create_pair_action_token(pair, flush=False):
     return record, token
 
 
-def _build_pair_action_link(pair, external=True):
-    """为照护提醒生成带 token 的行动链接。"""
-    _, token = _create_pair_action_token(pair, flush=True)
-    return url_for(
-        'public.elder_token_entry',
-        token=token,
-        short_code=pair.short_code,
-        _external=external
+def _revoke_active_pair_action_tokens(pair, now):
+    """将仍有效的行动令牌标记为已撤销。"""
+    PairActionToken.query.filter(
+        PairActionToken.pair_id == pair.id,
+        PairActionToken.revoked_at.is_(None),
+    ).update(
+        {PairActionToken.revoked_at: now},
+        synchronize_session=False,
     )
+
+
+def _create_pair_action_token(pair, flush=False, force_new=False):
+    """创建或复用行动链接 token，数据库始终只保存哈希。
+
+    未强制轮换时：复用最新一条未撤销且未过期、且派生匹配的令牌。
+    该绑定从未签发过令牌时才首次签发。历史令牌全部撤销或过期后返回 (None, None)，
+    打开工作台不会给已撤销绑定自动重发链接。
+    force_new=True 时先撤销全部未撤销令牌，再签发一条新令牌。
+    """
+    if not pair or not getattr(pair, 'id', None):
+        raise ValueError('pair id is required')
+
+    now = utcnow()
+    if force_new:
+        _revoke_active_pair_action_tokens(pair, now)
+        return _issue_pair_action_token(pair, now, flush)
+
+    reusable = PairActionToken.query.filter(
+        PairActionToken.pair_id == pair.id,
+        PairActionToken.revoked_at.is_(None),
+        PairActionToken.expires_at >= now,
+    ).order_by(PairActionToken.id.desc()).first()
+    if reusable:
+        token = _derive_pair_action_token(reusable)
+        expected_hash = hash_pair_token(token)
+        matched = False
+        if token and expected_hash and reusable.token_hash:
+            try:
+                matched = secrets.compare_digest(expected_hash, reusable.token_hash)
+            except (TypeError, ValueError):
+                matched = False
+        if matched:
+            return reusable, token
+
+    total_count = PairActionToken.query.filter(
+        PairActionToken.pair_id == pair.id,
+    ).count()
+    if total_count == 0:
+        return _issue_pair_action_token(pair, now, flush)
+    return None, None
+
+
+def _build_pair_action_link(pair, external=True):
+    """为照护提醒生成只含 token 的行动链接。没有可复用凭证时返回 None。"""
+    _, token = _create_pair_action_token(pair, flush=True)
+    if not token:
+        return None
+    return url_for('public.elder_token_entry', token=token, _external=external)
 
 
 def _create_pair_link_record(caregiver_id, community_code, expires_after=None, flush=False):
@@ -244,7 +268,7 @@ def _create_pair_link_record(caregiver_id, community_code, expires_after=None, f
     expires_after = expires_after or timedelta(days=3)
     link = PairLink(
         caregiver_id=caregiver_id,
-        short_code=short_code,
+        short_code=None,
         short_code_hash=hash_short_code(short_code),
         token_hash=hash_pair_token(token),
         community_code=community_code,
@@ -253,6 +277,7 @@ def _create_pair_link_record(caregiver_id, community_code, expires_after=None, f
     db.session.add(link)
     if flush:
         db.session.flush()
+    link.issued_short_code = short_code
     return link, token
 
 

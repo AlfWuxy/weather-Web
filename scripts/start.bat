@@ -20,7 +20,8 @@ echo 正在检查依赖包...
 python -m pip list | findstr Flask >nul
 if errorlevel 1 (
     echo [提示] 检测到未安装依赖包，正在安装...
-    python -m pip install -r requirements.txt
+    rem Lockfile hashes Linux/macOS wheels and sdists, not Windows wheels, so --only-binary=:all: cannot resolve here.
+    python -m pip install --require-hashes -r requirements.txt
     if errorlevel 1 (
         echo [错误] 依赖包安装失败
         pause

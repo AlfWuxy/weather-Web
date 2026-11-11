@@ -17,6 +17,7 @@ if str(ROOT_DIR) not in sys.path:
 DATA_PATH = ROOT_DIR / 'data' / 'research' / '数据.xlsx'
 
 from core.app import create_app  # noqa: E402
+from core.community_access import community_min_sample_size  # noqa: E402
 from core.db_models import MedicalRecord, Community, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402
 from core.time_utils import local_datetime_to_utc, today_local  # noqa: E402
@@ -347,11 +348,25 @@ def import_communities():
                     if any(keyword in record.diagnosis for keyword in chronic_keywords):
                         chronic_disease_count += 1
             
+            # 去重患者数或病历条数任一低于最小样本时，只保留地理位置，不写入、不打印人数和比例。
+            unique_count = len(unique_patients)
+            record_count = len(comm_records)
+            min_sample_size = community_min_sample_size()
+            if unique_count < min_sample_size or record_count < min_sample_size:
+                communities_data.append({
+                    'name': comm_name,
+                    'location': location,
+                    'latitude': latitude,
+                    'longitude': longitude,
+                    'small_sample': True,
+                })
+                continue
+
             # 计算统计指标
-            population = len(comm_records)  # 总病例数作为人口基数
-            unique_patients_count = len(unique_patients)  # 唯一患者数
+            population = record_count  # 总病例数作为人口基数
+            unique_patients_count = unique_count  # 唯一患者数
             elderly_ratio = elderly_count / total_age if total_age > 0 else 0
-            chronic_ratio = chronic_disease_count / len(comm_records) if comm_records else 0
+            chronic_ratio = chronic_disease_count / record_count if record_count else 0
             
             communities_data.append({
                 'name': comm_name,
@@ -371,6 +386,22 @@ def import_communities():
         health_service = HealthRiskService()
         
         for comm_data in communities_data:
+            if comm_data.get('small_sample'):
+                print(f"{comm_data['name']}:")
+                print("  仅保存基础地理位置")
+                db.session.add(Community(
+                    name=comm_data['name'],
+                    location=comm_data['location'],
+                    latitude=comm_data['latitude'],
+                    longitude=comm_data['longitude'],
+                    population=None,
+                    elderly_ratio=None,
+                    chronic_disease_ratio=None,
+                    vulnerability_index=None,
+                    risk_level=None,
+                ))
+                continue
+
             # 打印统计信息
             print(f"{comm_data['name']}:")
             print(f"  总病例数: {comm_data['population']}")

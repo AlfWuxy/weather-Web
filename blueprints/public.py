@@ -1,22 +1,32 @@
 # -*- coding: utf-8 -*-
 """Public and auth routes."""
+import json
 import logging
 from pathlib import Path
 from urllib.parse import parse_qsl
 
 import requests
-from flask import Blueprint, Response, abort, current_app, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, current_app, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 logger = logging.getLogger(__name__)
 
 from core.extensions import limiter
 from core.extensions import db
-from core.security import rate_limit_key
+from core.resource_budget import (
+    ResourceBudgetUnavailable,
+    ResourceLimitError,
+    UpstreamBusy,
+    acquire_lease,
+    get_upstream_cache,
+    release_lease,
+    reserve_upstream,
+    upstream_inflight_slot,
+)
+from core.security import _client_ip_for_rate_limit, hash_identifier, rate_limit_key
 from core.time_utils import utcnow
 from core.usage import log_usage_event
 from core.db_models import AlertDelivery
-from core.time_utils import today_local
 from services.public_service import (
     render_role_entry,
     handle_login,
@@ -25,15 +35,12 @@ from services.public_service import (
     render_public_risk_page,
     handle_guest_login,
     handle_logout,
+    handle_elder_token_entry,
     _handle_action_lookup,
     _handle_action_confirm,
     _handle_action_help,
     _handle_action_debrief,
-    _resolve_pair_from_session_or_code,
-    _validate_pair_token_binding,
-    _build_action_context,
-    _resolve_action_routes,
-    _render_action_page
+    _handle_token_debrief_get,
 )
 from utils.validators import sanitize_input
 
@@ -101,7 +108,22 @@ def login():
     return handle_login(next_url)
 
 
+def _register_ip_key():
+    """注册限流按来源 IP 的哈希分桶，不把原始地址写进计数键。"""
+    return hash_identifier(_client_ip_for_rate_limit() or 'unknown') or 'unknown'
+
+
 @bp.route('/register', methods=['GET', 'POST'], endpoint='register')
+@limiter.limit(
+    lambda: current_app.config.get('RATE_LIMIT_REGISTER_DAILY', '10 per day'),
+    methods=['POST'],
+    key_func=_register_ip_key,
+)
+@limiter.limit(
+    lambda: current_app.config.get('RATE_LIMIT_REGISTER', '3 per hour'),
+    methods=['POST'],
+    key_func=_register_ip_key,
+)
 def register():
     """注册"""
     return handle_register()
@@ -151,9 +173,8 @@ def elder_enter():
 
 @bp.route('/e/<token>', methods=['GET'], endpoint='elder_token_entry')
 def elder_token_entry(token):
-    """带令牌的绑定入口"""
-    token = sanitize_input(token, max_length=200)
-    return _handle_action_lookup(token=token, entry_action=url_for('public.elder_enter'))
+    """带令牌的绑定入口。立刻换成会话票据，地址栏不再保留 token。"""
+    return handle_elder_token_entry(token)
 
 
 @bp.route('/e/<token>/checkin', methods=['POST'], endpoint='elder_token_checkin')
@@ -179,29 +200,7 @@ def elder_token_debrief(token):
     token = sanitize_input(token, max_length=200)
     if request.method == 'POST':
         return _handle_action_debrief(token=token, focus_debrief=True)
-
-    short_code = sanitize_input(request.args.get('short_code'), max_length=12)
-    pair = _resolve_pair_from_session_or_code(short_code)
-    if not pair or not _validate_pair_token_binding(pair, short_code, token):
-        return redirect(url_for('public.elder_token_entry', token=token))
-
-    status_date = today_local()
-    status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
-        pair, status_date
-    )
-    action_routes = _resolve_action_routes(token=token)
-    return _render_action_page(
-        pair,
-        status,
-        actions,
-        resources,
-        weather_data,
-        heat_result,
-        risk_label,
-        risk_reasons=risk_reasons,
-        focus_debrief=True,
-        **action_routes
-    )
+    return _handle_token_debrief_get(token)
 
 
 @bp.route('/transparency', endpoint='transparency')
@@ -263,27 +262,93 @@ def amap_proxy(proxy_path):
     if safe_path not in ALLOWED_AMAP_PROXY_PATHS:
         abort(404)
 
-    params = [(key, value) for key, value in parse_qsl(request.query_string.decode('utf-8'), keep_blank_values=True) if key != 'jscode']
-    security_code = current_app.config.get('AMAP_SECURITY_JS_CODE')
-    if security_code:
-        params.append(('jscode', security_code))
+    raw_params = [
+        (key, value)
+        for key, value in parse_qsl(request.query_string.decode('utf-8'), keep_blank_values=True)
+        if key != 'jscode'
+    ]
+    sorted_params = tuple(sorted(raw_params))
+    cache_key = ('amap', safe_path, sorted_params)
+    cache = get_upstream_cache()
+    ttl = current_app.config.get('AMAP_PROXY_CACHE_TTL_SECONDS', 300)
 
+    def _cached_response():
+        cached = cache.get(cache_key)
+        if not cached:
+            return None
+        body, status, content_type = cached
+        return Response(body, status=status, content_type=content_type)
+
+    def _release_read_transaction():
+        try:
+            if db.session.new or db.session.dirty or db.session.deleted:
+                return
+            db.session.rollback()
+        except Exception:
+            logger.warning("地图代理读取事务结束失败，已忽略")
+
+    def _map_busy():
+        return jsonify({'error': '地图服务繁忙，请稍后再试'}), 429
+
+    hit = _cached_response()
+    if hit is not None:
+        return hit
+
+    lease = None
     try:
-        upstream = requests.get(
-            f'https://restapi.amap.com/{safe_path}',
-            params=params,
-            timeout=10
-        )
-    except requests.RequestException:
-        # 上游网络异常统一收口，避免错误细节泄露给前端。
-        logger.warning("高德地图上游请求失败")
-        abort(502)
-    content_type = upstream.headers.get('Content-Type', 'application/json; charset=utf-8')
-    if len(upstream.content or b'') > AMAP_PROXY_MAX_BYTES:
-        abort(502)
-    if 'json' not in content_type.lower():
-        abort(502)
-    return Response(upstream.content, status=upstream.status_code, content_type=content_type)
+        _release_read_transaction()
+        try:
+            lease = acquire_lease(repr(cache_key), ttl_seconds=15, namespace='map')
+        except (ResourceBudgetUnavailable, ResourceLimitError):
+            return _map_busy()
+        if not lease:
+            hit = _cached_response()
+            if hit is not None:
+                return hit
+            return _map_busy()
+        hit = _cached_response()
+        if hit is not None:
+            return hit
+
+        params = list(raw_params)
+        security_code = current_app.config.get('AMAP_SECURITY_JS_CODE')
+        if security_code:
+            params.append(('jscode', security_code))
+
+        try:
+            _release_read_transaction()
+            with upstream_inflight_slot('MAP', timeout=2.0):
+                reserve_upstream('MAP', units=1)
+                upstream = requests.get(
+                    f'https://restapi.amap.com/{safe_path}',
+                    params=params,
+                    timeout=10
+                )
+        except (UpstreamBusy, ResourceLimitError, ResourceBudgetUnavailable):
+            return _map_busy()
+        except requests.RequestException:
+            # 上游网络异常统一收口，避免错误细节泄露给前端。
+            logger.warning("高德地图上游请求失败")
+            abort(502)
+
+        content_type = upstream.headers.get('Content-Type', 'application/json; charset=utf-8')
+        body = upstream.content or b''
+        if len(body) > AMAP_PROXY_MAX_BYTES:
+            abort(502)
+        if 'json' not in content_type.lower():
+            abort(502)
+        legal_json = False
+        try:
+            json.loads(body.decode('utf-8'))
+            legal_json = True
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            legal_json = False
+        if legal_json and 200 <= upstream.status_code < 300:
+            cache.set(cache_key, (bytes(body), upstream.status_code, content_type), ttl)
+        return Response(body, status=upstream.status_code, content_type=content_type)
+    finally:
+        if lease:
+            release_lease(lease)
 
 
 @bp.route('/risk', endpoint='public_risk')

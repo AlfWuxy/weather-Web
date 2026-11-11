@@ -403,9 +403,9 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_MP_WRITE', os.getenv('RATE_LIMIT_MP_WRITE', '30 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_ALERTS', os.getenv('RATE_LIMIT_MP_ALERTS', '30 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_EVENTS', os.getenv('RATE_LIMIT_MP_EVENTS', '60 per minute'))
-    app.config.setdefault('PAIR_ACTION_TOKEN_TTL_DAYS', parse_int(os.getenv('PAIR_ACTION_TOKEN_TTL_DAYS', '90'), default=90))
+    app.config.setdefault('PAIR_ACTION_TOKEN_TTL_DAYS', parse_int(os.getenv('PAIR_ACTION_TOKEN_TTL_DAYS', '7'), default=7))
     app.config.setdefault('API_TOKEN_TTL_DAYS', parse_int(os.getenv('API_TOKEN_TTL_DAYS', '30'), default=30))
-    app.config.setdefault('SHORT_CODE_TTL_DAYS', parse_int(os.getenv('SHORT_CODE_TTL_DAYS', '90'), default=90))
+    app.config.setdefault('SHORT_CODE_TTL_DAYS', parse_int(os.getenv('SHORT_CODE_TTL_DAYS', '7'), default=7))
 
     if not app.config['DEBUG'] and app.config['RATE_LIMIT_STORAGE_URI'].startswith('memory://'):
         logger.warning(
@@ -494,4 +494,158 @@ def configure_app(app, logger):
     app.config.setdefault(
         'STATIC_CACHE_MAX_AGE_SECONDS',
         parse_int(os.getenv('STATIC_CACHE_MAX_AGE_SECONDS', '2592000'), default=2592000)  # 30 days
+    )
+
+    _apply_daybreak_security_config(app)
+
+
+def _apply_daybreak_security_config(app):
+    """Set Daybreak security defaults without overriding values already configured."""
+    app.config.setdefault(
+        'LOGIN_GLOBAL_ALERT_FAILURES',
+        parse_int(os.getenv('LOGIN_GLOBAL_ALERT_FAILURES', '25'), default=25),
+    )
+    app.config.setdefault(
+        'API_TOKEN_MAX_ACTIVE',
+        parse_int(os.getenv('API_TOKEN_MAX_ACTIVE', '5'), default=5),
+    )
+    app.config.setdefault(
+        'API_TOKEN_MAX_PER_USER',
+        parse_int(os.getenv('API_TOKEN_MAX_PER_USER', '20'), default=20),
+    )
+    app.config.setdefault(
+        'API_TOKEN_REVOKED_RETENTION_DAYS',
+        parse_int(os.getenv('API_TOKEN_REVOKED_RETENTION_DAYS', '7'), default=7),
+    )
+
+    app.config.setdefault(
+        'USAGE_EVENT_RETENTION_DAYS',
+        parse_int(os.getenv('USAGE_EVENT_RETENTION_DAYS', '90'), default=90),
+    )
+    app.config.setdefault(
+        'USAGE_EVENT_MAX_PER_USER',
+        parse_int(os.getenv('USAGE_EVENT_MAX_PER_USER', '1000'), default=1000),
+    )
+    # 正式用户按 user_id 计日配额。游客/匿名没有 users 主键，
+    # enforce_quota 时按受信客户端 IP 复用同一个数字（见 core.usage）。
+    app.config.setdefault(
+        'USAGE_EVENT_DAILY_PER_USER',
+        parse_int(os.getenv('USAGE_EVENT_DAILY_PER_USER', '200'), default=200),
+    )
+    app.config.setdefault(
+        'USAGE_EVENT_GLOBAL_DAILY_LIMIT',
+        parse_int(os.getenv('USAGE_EVENT_GLOBAL_DAILY_LIMIT', '10000'), default=10000),
+    )
+    app.config.setdefault(
+        'USAGE_EXPORT_MAX_ROWS',
+        parse_int(os.getenv('USAGE_EXPORT_MAX_ROWS', '2000'), default=2000),
+    )
+    app.config.setdefault(
+        'RATE_LIMIT_EVENTS',
+        (os.getenv('RATE_LIMIT_EVENTS') or '30 per minute').strip(),
+    )
+
+    app.config.setdefault(
+        'COMMUNITY_MIN_SAMPLE_SIZE',
+        parse_int(os.getenv('COMMUNITY_MIN_SAMPLE_SIZE', '10'), default=10),
+    )
+    app.config.setdefault(
+        'PAIR_ACTION_SESSION_TTL_SECONDS',
+        parse_int(os.getenv('PAIR_ACTION_SESSION_TTL_SECONDS', '43200'), default=43200),
+    )
+    app.config.setdefault(
+        'RATE_LIMIT_PAIR_CREDENTIAL_MANAGE',
+        (os.getenv('RATE_LIMIT_PAIR_CREDENTIAL_MANAGE') or '10 per hour').strip(),
+    )
+
+    app.config.setdefault(
+        'PASSWORD_MIN_LENGTH',
+        parse_int(os.getenv('PASSWORD_MIN_LENGTH', '8'), default=8),
+    )
+    app.config.setdefault(
+        'RATE_LIMIT_REGISTER',
+        (os.getenv('RATE_LIMIT_REGISTER') or '3 per hour').strip(),
+    )
+    app.config.setdefault(
+        'RATE_LIMIT_REGISTER_DAILY',
+        (os.getenv('RATE_LIMIT_REGISTER_DAILY') or '10 per day').strip(),
+    )
+    app.config.setdefault(
+        'REGISTER_DAILY_LIMIT',
+        parse_int(os.getenv('REGISTER_DAILY_LIMIT', '200'), default=200),
+    )
+    app.config.setdefault(
+        'REGISTER_SHARD_COUNT',
+        parse_int(os.getenv('REGISTER_SHARD_COUNT', '16'), default=16),
+    )
+    app.config.setdefault(
+        'REGISTER_SHARD_DAILY_LIMIT',
+        parse_int(os.getenv('REGISTER_SHARD_DAILY_LIMIT', '40'), default=40),
+    )
+    app.config.setdefault(
+        'REGISTER_CHALLENGE_REQUIRED',
+        parse_bool(os.getenv('REGISTER_CHALLENGE_REQUIRED', '1'), default=True),
+    )
+    app.config.setdefault(
+        'REGISTER_CHALLENGE_TTL_SECONDS',
+        parse_int(os.getenv('REGISTER_CHALLENGE_TTL_SECONDS', '600'), default=600),
+    )
+
+    app.config.setdefault(
+        'WEATHER_SYNC_BYPASS',
+        parse_bool(os.getenv('WEATHER_SYNC_BYPASS', '0'), default=False),
+    )
+    app.config.setdefault(
+        'WEATHER_UPSTREAM_HOURLY_LIMIT',
+        parse_int(os.getenv('WEATHER_UPSTREAM_HOURLY_LIMIT', '300'), default=300),
+    )
+    app.config.setdefault(
+        'WEATHER_UPSTREAM_DAILY_LIMIT',
+        parse_int(os.getenv('WEATHER_UPSTREAM_DAILY_LIMIT', '2000'), default=2000),
+    )
+    app.config.setdefault(
+        'WEATHER_UPSTREAM_MONTHLY_LIMIT',
+        parse_int(os.getenv('WEATHER_UPSTREAM_MONTHLY_LIMIT', '40000'), default=40000),
+    )
+    app.config.setdefault(
+        'WEATHER_MAX_INFLIGHT',
+        parse_int(os.getenv('WEATHER_MAX_INFLIGHT', '6'), default=6),
+    )
+    app.config.setdefault(
+        'NOWCAST_CACHE_TTL_SECONDS',
+        parse_int(os.getenv('NOWCAST_CACHE_TTL_SECONDS', '600'), default=600),
+    )
+
+    app.config.setdefault(
+        'MAP_UPSTREAM_HOURLY_LIMIT',
+        parse_int(os.getenv('MAP_UPSTREAM_HOURLY_LIMIT', '200'), default=200),
+    )
+    app.config.setdefault(
+        'MAP_UPSTREAM_DAILY_LIMIT',
+        parse_int(os.getenv('MAP_UPSTREAM_DAILY_LIMIT', '1000'), default=1000),
+    )
+    app.config.setdefault(
+        'MAP_UPSTREAM_MONTHLY_LIMIT',
+        parse_int(os.getenv('MAP_UPSTREAM_MONTHLY_LIMIT', '15000'), default=15000),
+    )
+    app.config.setdefault(
+        'MAP_MAX_INFLIGHT',
+        parse_int(os.getenv('MAP_MAX_INFLIGHT', '6'), default=6),
+    )
+    app.config.setdefault(
+        'AMAP_PROXY_CACHE_TTL_SECONDS',
+        parse_int(os.getenv('AMAP_PROXY_CACHE_TTL_SECONDS', '300'), default=300),
+    )
+
+    app.config.setdefault(
+        'HSTS_ENABLED',
+        parse_bool(os.getenv('HSTS_ENABLED', '0'), default=False),
+    )
+    app.config.setdefault(
+        'HSTS_MAX_AGE_SECONDS',
+        parse_int(os.getenv('HSTS_MAX_AGE_SECONDS', '31536000'), default=31536000),
+    )
+    app.config.setdefault(
+        'HSTS_INCLUDE_SUBDOMAINS',
+        parse_bool(os.getenv('HSTS_INCLUDE_SUBDOMAINS', '1'), default=True),
     )

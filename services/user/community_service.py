@@ -394,7 +394,7 @@ def community_announce():
 
 def community_risk():
     """社区风险地图"""
-    from core.community_access import patient_community_scope
+    from core.community_access import community_min_sample_size, patient_community_scope
     community_scope = patient_community_scope()
     if community_scope == ():
         return render_template('community_access_denied.html'), 403
@@ -405,6 +405,7 @@ def community_risk():
         communities_query = communities_query.filter(Community.name.in_(community_scope))
         disease_query = disease_query.filter(MedicalRecord.community.in_(community_scope))
     communities = communities_query.all()
+    min_sample = community_min_sample_size()
     disease_options = [
         row[0] for row in (
             disease_query
@@ -423,16 +424,31 @@ def community_risk():
             longitude, latitude = coords[0], coords[1]
         else:
             longitude, latitude = comm.longitude, comm.latitude
+        population = comm.population
+        elderly_ratio = comm.elderly_ratio
+        chronic_disease_ratio = comm.chronic_disease_ratio
+        vulnerability_index = comm.vulnerability_index
+        sample_hidden = population is None
+        if not sample_hidden:
+            try:
+                sample_hidden = float(population) < float(min_sample)
+            except (TypeError, ValueError):
+                sample_hidden = True
+        if sample_hidden:
+            population = None
+            elderly_ratio = None
+            chronic_disease_ratio = None
+            vulnerability_index = None
         communities_data.append({
             'id': comm.id,
             'name': comm.name,
             'location': comm.location,
             'latitude': latitude,
             'longitude': longitude,
-            'population': comm.population,
-            'elderly_ratio': comm.elderly_ratio,
-            'chronic_disease_ratio': comm.chronic_disease_ratio,
-            'vulnerability_index': comm.vulnerability_index,
+            'population': population,
+            'elderly_ratio': elderly_ratio,
+            'chronic_disease_ratio': chronic_disease_ratio,
+            'vulnerability_index': vulnerability_index,
             'risk_level': comm.risk_level
         })
     return render_template('community_risk.html',

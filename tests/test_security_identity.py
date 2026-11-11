@@ -5,9 +5,14 @@ import pytest
 
 def _login(client, user_id):
     from flask import g
+    from core.db_models import User
+    from core.extensions import db
+
     g.pop('_login_user', None)
+    with client.application.app_context():
+        stamped_id = db.session.get(User, user_id).get_id()
     with client.session_transaction() as session:
-        session['_user_id'] = str(user_id)
+        session['_user_id'] = stamped_id
         session['_fresh'] = True
         session['_csrf_token'] = 'identity-csrf'
 

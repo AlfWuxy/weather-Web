@@ -8,6 +8,10 @@ from core.guest import is_guest_user
 from core.extensions import limiter
 from core.security import rate_limit_key
 from services import user_service
+from services.user.caregiver_service import (
+    caregiver_pair_credentials_revoke as revoke_pair_credentials,
+    caregiver_pair_credentials_rotate as rotate_pair_credentials,
+)
 
 bp = Blueprint('user', __name__)
 
@@ -52,6 +56,22 @@ def caregiver_pair_create():
 def caregiver_pair_detail(pair_id):
     """照护关系详情"""
     return user_service.caregiver_pair_detail(pair_id)
+
+
+@bp.route('/caregiver/pair/<int:pair_id>/credentials/revoke', methods=['POST'], endpoint='caregiver_pair_credentials_revoke')
+@login_required
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_PAIR_CREDENTIAL_MANAGE', '10 per hour'), key_func=rate_limit_key)
+def caregiver_pair_credentials_revoke(pair_id):
+    """撤销照护行动链接与短码"""
+    return revoke_pair_credentials(pair_id)
+
+
+@bp.route('/caregiver/pair/<int:pair_id>/credentials/rotate', methods=['POST'], endpoint='caregiver_pair_credentials_rotate')
+@login_required
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_PAIR_CREDENTIAL_MANAGE', '10 per hour'), key_func=rate_limit_key)
+def caregiver_pair_credentials_rotate(pair_id):
+    """轮换照护行动链接与短码"""
+    return rotate_pair_credentials(pair_id)
 
 
 @bp.route('/caregiver/pair/<int:pair_id>/action-log', methods=['POST'], endpoint='caregiver_action_log')

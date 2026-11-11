@@ -282,6 +282,7 @@ def api_comprehensive_alert():
 
 @bp.route('/api/v1/events', methods=['POST'], endpoint='api_v1_events')
 @login_required
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_EVENTS', '30 per minute'), key_func=rate_limit_key)
 def api_v1_events():
     """写入试点埋点事件（v1）"""
     return api_service._api_usage_event()

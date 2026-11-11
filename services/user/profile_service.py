@@ -6,7 +6,7 @@ import math
 from urllib.parse import urlparse
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
-from flask_login import current_user
+from flask_login import current_user, login_user
 
 from core.analytics import get_high_risk_streak
 from core.db_models import ApiToken, Community, HealthRiskAssessment
@@ -18,7 +18,12 @@ from core.guest import (
 from services.guest_experience import GuestExperienceError, save_guest_assessment
 from core.notifications import create_notification
 from core.time_utils import utcnow
-from core.usage import api_token_ttl_days, create_api_token, revoke_api_tokens
+from core.usage import (
+    UsageQuotaError,
+    api_token_ttl_days,
+    create_api_token,
+    revoke_api_tokens,
+)
 from core.weather import (
     ensure_user_location_valid,
     get_weather_with_cache,
@@ -257,6 +262,8 @@ def profile():
                 plain = create_api_token(current_user.id, name=token_name)
                 session['last_api_token_plain'] = plain
                 flash('API Token 已生成（仅展示一次，请立即复制保存）', 'success')
+            except UsageQuotaError as exc:
+                flash(str(exc), 'error')
             except Exception:
                 logger.exception("API token create failed")
                 flash('生成失败，请稍后重试。', 'error')
@@ -276,8 +283,18 @@ def profile():
                 if not valid:
                     flash(result, 'error')
                     return redirect(url_for('user.profile'))
-                current_user.set_password(result)
+                account = current_user._get_current_object()
+                account.set_password(result)
                 db.session.commit()
+                # 必须传入真实用户。login_user(current_user) 会把 LocalProxy
+                # 写进 g._login_user，随后限流或 login_required 再读 current_user 会递归。
+                # get_id() 带上新的 password_session_stamp，旧 session cookie 因此失效。
+                login_user(account)
+                remember_cookie_name = current_app.config.get(
+                    'REMEMBER_COOKIE_NAME', 'remember_token'
+                )
+                if request.cookies.get(remember_cookie_name):
+                    session['_remember'] = 'clear'
                 session.pop('last_api_token_plain', None)
                 flash('密码已更新，所有小程序绑定凭证已撤销', 'success')
             else:
@@ -343,13 +360,21 @@ def profile():
     chronic_diseases_list = safe_json_loads(current_user.chronic_diseases, [])
 
     last_api_token_plain = session.pop('last_api_token_plain', None)
+    try:
+        max_per_user = int(current_app.config.get('API_TOKEN_MAX_PER_USER', 20))
+    except (TypeError, ValueError):
+        max_per_user = 20
+    if max_per_user < 1:
+        max_per_user = 20
     return render_template(
         'profile.html',
         communities=communities,
         chronic_diseases_list=chronic_diseases_list,
         last_api_token_plain=last_api_token_plain,
         api_token_ttl_days=api_token_ttl_days(),
-        api_tokens=ApiToken.query.filter_by(user_id=current_user.id).order_by(ApiToken.created_at.desc()).all()
+        api_tokens=ApiToken.query.filter_by(user_id=current_user.id).order_by(
+            ApiToken.created_at.desc()
+        ).limit(max_per_user).all()
     )
 
 

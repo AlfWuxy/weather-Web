@@ -209,6 +209,7 @@ def test_mp_pair_limit_rolls_back_new_member(app, client, db_session):
 
 def test_legacy_link_redemption_obeys_cap_and_preserves_link(app, db_session):
     from core.db_models import Pair, PairLink, User
+    from core.security import hash_short_code
     from services.user._common import _create_pair_record, _create_pair_link_record
     from services.public_service import _resolve_pair
     user = User(username='legacy-link-cap', role='user')
@@ -217,8 +218,10 @@ def test_legacy_link_redemption_obeys_cap_and_preserves_link(app, db_session):
     db_session.flush()
     _create_pair_record(user.id, '九江')
     link, token = _create_pair_link_record(user.id, '九江', flush=True)
+    short_code = link.issued_short_code
+    assert short_code
     db_session.commit()
-    link_id, short_code, user_id = link.id, link.short_code, user.id
+    link_id, user_id = link.id, user.id
     app.config['PAIR_MAX_PER_USER'] = 1
     with app.test_request_context('/action'):
         pair, error = _resolve_pair(short_code, token)
@@ -230,7 +233,9 @@ def test_legacy_link_redemption_obeys_cap_and_preserves_link(app, db_session):
     app.config['PAIR_MAX_PER_USER'] = 2
     with app.test_request_context('/action'):
         pair, error = _resolve_pair(short_code, token)
-        assert error is None and pair.short_code == short_code
+        assert error is None
+        assert pair.short_code is None
+        assert pair.short_code_hash == hash_short_code(short_code)
     db_session.expire_all()
     assert Pair.query.filter_by(caregiver_id=user_id).count() == 2
     assert db_session.get(PairLink, link_id).status == 'redeemed'
@@ -365,3 +370,220 @@ def test_browser_key_never_falls_back_to_server_or_legacy(app, db_session, monke
     monkeypatch.setenv('AMAP_JS_API_KEY', 'server-secret-xxxxxxxxxxxxxxxx')
     with pytest.raises(RuntimeError, match='不同用途'):
         configure_app(app, logging.getLogger('test'))
+
+
+def _forecast_daily(days):
+    from datetime import timedelta
+    from core.time_utils import today_local
+
+    start = today_local()
+    return {
+        'success': True,
+        'daily': [
+            {
+                'date': (start + timedelta(days=index)).strftime('%Y-%m-%d'),
+                'temperature_max': 31,
+                'temperature_min': 24,
+                'temperature_mean': 27,
+                'humidity': 60,
+                'data_source': 'QWeather',
+                'is_mock': False,
+            }
+            for index in range(days)
+        ],
+        'meta': {'source': 'QWeather'},
+    }
+
+
+class _BudgetForecastFetcher:
+    def __init__(self):
+        self.qweather_calls = 0
+        self.forecast_calls = 0
+
+    def get_qweather_daily_forecast(self, _location, days=7):
+        self.qweather_calls += 1
+        return _forecast_daily(days)
+
+    def get_weather_forecast(self, _location, days=7):
+        self.forecast_calls += 1
+        return [{'date': '2026-07-01', 'temperature_max': 30, 'temperature_min': 20, 'is_mock': True}]
+
+
+def _weather_budget_used():
+    from core.resource_budget import ResourceBudget
+
+    rows = ResourceBudget.query.filter(ResourceBudget.key.like('WEATHER:%')).all()
+    assert rows
+    assert {row.used for row in rows} == {rows[0].used}
+    return rows[0].used
+
+
+def test_forecast_upstream_budget_skips_cache_and_keeps_web_requests(app, db_session):
+    from core.db_models import ForecastCache
+    from core.resource_budget import ResourceBudget
+    from core.weather import (
+        get_forecast_with_cache,
+        get_qweather_forecast_with_cache,
+        register_weather_fetcher,
+    )
+
+    fetcher = _BudgetForecastFetcher()
+    with app.app_context():
+        app.config.update(
+            DEMO_MODE=False,
+            WEATHER_UPSTREAM_HOURLY_LIMIT=1,
+            WEATHER_UPSTREAM_DAILY_LIMIT=1,
+            WEATHER_UPSTREAM_MONTHLY_LIMIT=1,
+            WEATHER_SYNC_BYPASS=False,
+        )
+        app.extensions['redis_client'] = None
+        register_weather_fetcher(fetcher)
+
+        fresh, from_cache, meta = get_qweather_forecast_with_cache('都昌', days=7)
+        assert from_cache is False and len(fresh) == 7 and meta['source'] == 'QWeather'
+        assert fetcher.qweather_calls == 1
+        assert _weather_budget_used() == 1
+
+        cached, from_cache, _meta = get_qweather_forecast_with_cache('都昌', days=7)
+        assert from_cache is True and cached == fresh
+        assert fetcher.qweather_calls == 1
+        assert _weather_budget_used() == 1
+        assert ResourceBudget.query.filter(ResourceBudget.key.like('MAP:%')).count() == 0
+
+        app.config['WEATHER_SYNC_BYPASS'] = True
+        synced, sync_cached, sync_meta = get_qweather_forecast_with_cache('都昌', days=6)
+        assert sync_cached is False and len(synced) == 6 and sync_meta['source'] == 'QWeather'
+        assert fetcher.qweather_calls == 2
+        assert _weather_budget_used() == 1
+
+        with app.test_request_context('/dashboard'):
+            denied, denied_cached, denied_meta = get_qweather_forecast_with_cache('都昌', days=5)
+        assert denied == [] and denied_cached is False
+        assert denied_meta['error'] == 'upstream_budget'
+        assert fetcher.qweather_calls == 2
+        assert _weather_budget_used() == 1
+        assert ForecastCache.query.filter_by(days=5).count() == 0
+
+        app.config['WEATHER_SYNC_BYPASS'] = False
+        denied_forecast, forecast_cached = get_forecast_with_cache('都昌', days=4)
+        assert denied_forecast == [] and forecast_cached is False
+        assert fetcher.forecast_calls == 0
+        assert ForecastCache.query.filter_by(days=4).count() == 0
+
+
+def test_forecast_budget_denial_is_not_cached(app, db_session):
+    from core.db_models import ForecastCache
+    from core.weather import get_forecast_with_cache, get_qweather_forecast_with_cache, register_weather_fetcher
+
+    fetcher = _BudgetForecastFetcher()
+    with app.app_context():
+        app.config.update(
+            DEMO_MODE=False,
+            WEATHER_UPSTREAM_HOURLY_LIMIT=0,
+            WEATHER_UPSTREAM_DAILY_LIMIT=0,
+            WEATHER_UPSTREAM_MONTHLY_LIMIT=0,
+            WEATHER_SYNC_BYPASS=False,
+        )
+        app.extensions['redis_client'] = None
+        register_weather_fetcher(fetcher)
+
+        with app.test_request_context('/api/forecast'):
+            denied, denied_cached, denied_meta = get_qweather_forecast_with_cache('都昌', days=7)
+        assert denied == [] and denied_cached is False
+        assert denied_meta['error'] == 'upstream_budget'
+        empty, from_cache = get_forecast_with_cache('都昌', days=3)
+        assert empty == [] and from_cache is False
+        assert fetcher.qweather_calls == fetcher.forecast_calls == 0
+        assert ForecastCache.query.count() == 0
+
+        app.config.update(
+            WEATHER_UPSTREAM_HOURLY_LIMIT=5,
+            WEATHER_UPSTREAM_DAILY_LIMIT=5,
+            WEATHER_UPSTREAM_MONTHLY_LIMIT=5,
+        )
+        restored, from_cache, _meta = get_qweather_forecast_with_cache('都昌', days=7)
+        assert from_cache is False and len(restored) == 7
+        generic, generic_cached = get_forecast_with_cache('都昌', days=3)
+        assert generic_cached is False and generic
+        again, again_cached = get_forecast_with_cache('都昌', days=3)
+        assert again_cached is True and again == generic
+        assert fetcher.qweather_calls == 1
+        assert fetcher.forecast_calls == 1
+
+
+def test_workbench_openmeteo_reserves_weather_budget_on_miss_only(app, db_session, monkeypatch):
+    from core.resource_budget import ResourceBudget
+    from services import heat_risk_workbench_forecast as forecast_service
+
+    calls = []
+
+    def fake_get(*_args, **_kwargs):
+        from datetime import timedelta
+        from core.time_utils import today_local
+
+        calls.append(1)
+        start = today_local()
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    'daily': {
+                        'time': [(start + timedelta(days=index)).isoformat() for index in range(7)],
+                        'temperature_2m_max': [36] * 7,
+                        'temperature_2m_min': [24] * 7,
+                    }
+                }
+
+        return Response()
+
+    monkeypatch.setattr(forecast_service.requests, 'get', fake_get)
+    with app.app_context():
+        app.config.update(
+            WEATHER_UPSTREAM_HOURLY_LIMIT=1,
+            WEATHER_UPSTREAM_DAILY_LIMIT=1,
+            WEATHER_UPSTREAM_MONTHLY_LIMIT=1,
+            WEATHER_SYNC_BYPASS=False,
+        )
+        app.extensions['redis_client'] = None
+        first = forecast_service.get_openmeteo_forecast_with_cache('都昌县')
+        second = forecast_service.get_openmeteo_forecast_with_cache('都昌县')
+        assert len(first) == 7 and second == first
+        assert calls == [1]
+        assert _weather_budget_used() == 1
+        assert ResourceBudget.query.filter(ResourceBudget.key.like('MAP:%')).count() == 0
+
+        denied = forecast_service.get_openmeteo_forecast_with_cache('九江')
+        assert denied == []
+        assert calls == [1]
+
+
+def test_scheduled_sync_bypass_does_not_stick_to_web_config(app, db_session, monkeypatch):
+    from services.pipelines import sync_weather_cache as cache_pipeline
+    from services.pipelines import sync_weather_data as daily_pipeline
+
+    monkeypatch.setattr(daily_pipeline, 'app', app)
+    monkeypatch.setattr(cache_pipeline, 'app', app)
+    seen = []
+
+    class _Daily:
+        def get_current_weather(self, _location):
+            seen.append(('daily', bool(app.config.get('WEATHER_SYNC_BYPASS'))))
+            return None
+
+    class _Cache:
+        def get_current_weather(self, _location):
+            seen.append(('cache', bool(app.config.get('WEATHER_SYNC_BYPASS'))))
+            return None
+
+    monkeypatch.setattr(daily_pipeline, 'WeatherService', lambda: _Daily())
+    monkeypatch.setattr(cache_pipeline, 'WeatherService', lambda: _Cache())
+    app.config['WEATHER_SYNC_BYPASS'] = False
+
+    daily_pipeline.sync_daily_weather(location='都昌县')
+    cache_pipeline.sync_weather_cache(locations=['都昌县'], update_daily=False)
+
+    assert seen == [('daily', True), ('cache', True)]
+    assert app.config.get('WEATHER_SYNC_BYPASS') is False

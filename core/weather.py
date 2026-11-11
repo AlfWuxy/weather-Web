@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Weather-related helpers."""
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 import json
 import logging
@@ -12,6 +13,15 @@ from flask_login import current_user
 from core.constants import DEFAULT_CITY_LABEL, WEATHER_CACHE_TTL_MINUTES
 from core.guest import is_guest_user
 from core.extensions import db
+from core.resource_budget import (
+    ResourceBudgetUnavailable,
+    ResourceLimitError,
+    UpstreamBusy,
+    acquire_lease,
+    release_lease,
+    reserve_upstream,
+    upstream_inflight_slot,
+)
 from core.db_models import Community, ForecastCache, WeatherCache, WeatherData
 from core.time_utils import today_local, utcnow, ensure_utc_aware
 from utils.parsers import parse_bool, safe_json_loads
@@ -343,6 +353,108 @@ def _weather_cache_location(location):
     return normalized
 
 
+def _release_clean_read_transaction():
+    """结束只读事务，避免随后的预算写锁在 SQLite 上互相等待。"""
+    try:
+        if db.session.new or db.session.dirty or db.session.deleted:
+            return
+        db.session.rollback()
+    except Exception:
+        logger.warning("天气缓存读取事务结束失败，已忽略")
+
+
+def _weather_sync_bypasses_budget():
+    """定时同步可跳过 Web 额度。只要还在 HTTP 请求里，就必须计费。"""
+    if has_request_context() or not has_app_context():
+        return False
+    return bool(current_app.config.get('WEATHER_SYNC_BYPASS'))
+
+
+def _call_weather_upstream(fetch):
+    """缓存未命中后才占用与实况相同的 WEATHER 额度，并持有并发槽直到调用返回。"""
+    if _weather_sync_bypasses_budget():
+        return fetch()
+    _release_clean_read_transaction()
+    with upstream_inflight_slot('WEATHER', timeout=2.0):
+        reserve_upstream('WEATHER', units=1)
+        return fetch()
+
+
+@contextmanager
+def weather_sync_bypass():
+    """给定时同步单独放开 Web 天气额度。请求上下文内的读取仍然计费。"""
+    if not has_app_context():
+        yield
+        return
+    previous = current_app.config.get('WEATHER_SYNC_BYPASS', False)
+    current_app.config['WEATHER_SYNC_BYPASS'] = True
+    try:
+        yield
+    finally:
+        current_app.config['WEATHER_SYNC_BYPASS'] = previous
+
+
+def _load_fresh_weather(location, ttl_minutes, redis_client, redis_key):
+    """Redis 优先，其次未过期的数据库缓存。未命中返回 None。"""
+    redis_payload = _redis_get_json(redis_client, redis_key, {})
+    if redis_payload is not None:
+        return redis_payload
+    now = utcnow()
+    try:
+        cache = WeatherCache.query.filter_by(location=location).order_by(
+            WeatherCache.fetched_at.desc(),
+            WeatherCache.id.desc()
+        ).first()
+        if cache and cache.fetched_at:
+            if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
+                return safe_json_loads(cache.payload, {})
+    except Exception as exc:
+        logger.warning("天气缓存不可用，已跳过缓存: %s", exc)
+        db.session.rollback()
+    return None
+
+
+def _wait_fresh_weather(location, ttl_minutes, redis_client, redis_key, timeout=1.0):
+    """未抢到单飞锁时最多等待 timeout 秒，期间只重读缓存。"""
+    deadline = time.monotonic() + timeout
+    while True:
+        cached = _load_fresh_weather(location, ttl_minutes, redis_client, redis_key)
+        if cached is not None:
+            return cached
+        _release_clean_read_transaction()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        time.sleep(min(0.1, remaining))
+
+
+def _store_current_weather(location, weather_data, redis_client, redis_key, ttl_seconds):
+    now = utcnow()
+    try:
+        _redis_set_json(redis_client, redis_key, ttl_seconds, weather_data)
+        cache = WeatherCache.query.filter_by(location=location).order_by(
+            WeatherCache.fetched_at.desc(),
+            WeatherCache.id.desc()
+        ).first()
+        payload = json.dumps(weather_data, ensure_ascii=False)
+        is_mock = bool(weather_data.get('is_mock'))
+        if cache:
+            cache.payload = payload
+            cache.fetched_at = now
+            cache.is_mock = is_mock
+        else:
+            db.session.add(WeatherCache(
+                location=location,
+                fetched_at=now,
+                payload=payload,
+                is_mock=is_mock,
+            ))
+        db.session.commit()
+    except Exception as exc:
+        logger.warning("天气缓存写入失败，已忽略: %s", exc)
+        db.session.rollback()
+
+
 def get_weather_with_cache(location, ttl_minutes=None):
     """获取带缓存的天气数据"""
     if is_demo_mode():
@@ -353,52 +465,48 @@ def get_weather_with_cache(location, ttl_minutes=None):
     ttl_seconds = max(int(ttl_minutes * 60), 60)
     redis_client = _get_redis_client()
     redis_key = _redis_cache_key('weather:current', location)
-    redis_payload = _redis_get_json(redis_client, redis_key, {})
-    if redis_payload is not None:
-        return redis_payload, True
-    now = utcnow()
-    cache = None
+    cached = _load_fresh_weather(location, ttl_minutes, redis_client, redis_key)
+    if cached is not None:
+        return cached, True
+
+    fetcher = get_weather_fetcher()
+    lease = None
     try:
-        cache = WeatherCache.query.filter_by(location=location).order_by(
-            WeatherCache.fetched_at.desc(),
-            WeatherCache.id.desc()
-        ).first()
-        if cache and cache.fetched_at:
-            # 确保从数据库读取的 datetime 是 UTC aware 的
-            if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
-                return safe_json_loads(cache.payload, {}), True
-    except Exception as exc:
-        logger.warning("天气缓存不可用，已跳过缓存: %s", exc)
-        db.session.rollback()
-    weather_service = get_weather_fetcher()
-    try:
-        if weather_service is None:
+        if fetcher is None:
             raise RuntimeError("Weather fetcher not configured")
-        weather_data = weather_service.get_current_weather(location)
+        _release_clean_read_transaction()
+        # canonical_loc 已归并到同一个县缓存键，单飞锁使用这一个键。
+        lease = acquire_lease(location, ttl_seconds=30, namespace='weather')
+        if not lease:
+            waited = _wait_fresh_weather(
+                location, ttl_minutes, redis_client, redis_key, timeout=1.0,
+            )
+            if waited is not None:
+                return waited, True
+            logger.warning("天气单飞未获得租约，使用默认数据")
+            return get_fallback_weather_data(), False
+        cached = _load_fresh_weather(location, ttl_minutes, redis_client, redis_key)
+        if cached is not None:
+            return cached, True
+        _release_clean_read_transaction()
+        with upstream_inflight_slot('WEATHER', timeout=2.0):
+            reserve_upstream('WEATHER', units=1)
+            weather_data = fetcher.get_current_weather(location)
+        if not weather_data:
+            weather_data = get_fallback_weather_data()
+        _store_current_weather(location, weather_data, redis_client, redis_key, ttl_seconds)
+        return weather_data, False
+    except (UpstreamBusy, ResourceLimitError, ResourceBudgetUnavailable) as exc:
+        logger.warning("天气上游繁忙或额度不足，使用默认数据: %s", exc)
+        return get_fallback_weather_data(), False
     except Exception as exc:
         logger.warning("获取天气失败，使用默认数据: %s", exc)
-        weather_data = None
-    if not weather_data:
         weather_data = get_fallback_weather_data()
-    try:
-        _redis_set_json(redis_client, redis_key, ttl_seconds, weather_data)
-        if cache:
-            cache.payload = json.dumps(weather_data, ensure_ascii=False)
-            cache.fetched_at = now
-            cache.is_mock = bool(weather_data.get('is_mock'))
-        else:
-            cache = WeatherCache(
-                location=location,
-                fetched_at=now,
-                payload=json.dumps(weather_data, ensure_ascii=False),
-                is_mock=bool(weather_data.get('is_mock'))
-            )
-            db.session.add(cache)
-        db.session.commit()
-    except Exception as exc:
-        logger.warning("天气缓存写入失败，已忽略: %s", exc)
-        db.session.rollback()
-    return weather_data, False
+        _store_current_weather(location, weather_data, redis_client, redis_key, ttl_seconds)
+        return weather_data, False
+    finally:
+        if lease:
+            release_lease(lease)
 
 
 def get_fallback_weather_data():
@@ -448,7 +556,12 @@ def get_forecast_with_cache(location, days=7, ttl_minutes=None):
     try:
         if weather_service is None:
             raise RuntimeError("Weather fetcher not configured")
-        forecast_data = weather_service.get_weather_forecast(location, days=days)
+        forecast_data = _call_weather_upstream(
+            lambda: weather_service.get_weather_forecast(location, days=days)
+        )
+    except (UpstreamBusy, ResourceLimitError, ResourceBudgetUnavailable) as exc:
+        logger.warning("预报上游繁忙或额度不足，未发起外部请求: %s", exc)
+        return [], False
     except Exception as exc:
         logger.warning("获取天气预报失败，使用兜底数据: %s", exc)
         forecast_data = []
@@ -578,7 +691,9 @@ def get_qweather_forecast_with_cache(location, days=7, ttl_minutes=None):
     try:
         if weather_service is None or not hasattr(weather_service, 'get_qweather_daily_forecast'):
             raise RuntimeError("QWeather forecast fetcher not configured")
-        result = weather_service.get_qweather_daily_forecast(location, days=days)
+        result = _call_weather_upstream(
+            lambda: weather_service.get_qweather_daily_forecast(location, days=days)
+        )
         if isinstance(result, dict):
             forecast_data = result.get('daily') or []
             meta = result.get('meta') or meta
@@ -586,6 +701,9 @@ def get_qweather_forecast_with_cache(location, days=7, ttl_minutes=None):
                 return [], False, meta
         else:
             forecast_data = result or []
+    except (UpstreamBusy, ResourceLimitError, ResourceBudgetUnavailable) as exc:
+        logger.warning("和风-only预报受上游额度限制: %s", exc)
+        return [], False, {'source': 'QWeather', 'error': 'upstream_budget'}
     except Exception as exc:
         logger.warning("获取和风-only预报失败: %s", exc)
         return [], False, {'source': 'QWeather', 'error': 'fetch_failed'}
