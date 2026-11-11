@@ -368,7 +368,7 @@ def _public_vulnerability_sort_key(item):
 
 class CommunityRiskService:
     """社区风险评估服务"""
-    
+
     def __init__(self):
         # 风险分数归一化参数（使用“超额风险”避免全量顶格）
         self.excess_score_efold = self._read_float_env(
@@ -403,10 +403,10 @@ class CommunityRiskService:
             'heat_island_index': 0.5,   # 热岛效应权重
             'medical_accessibility': -0.3  # 医疗可达性权重（负向）
         }
-        
+
         # 社区敏感性参数（v_c）
         self.community_sensitivity = {}
-        
+
         # 加载社区数据
         self._load_community_profiles()
 
@@ -745,7 +745,7 @@ class CommunityRiskService:
         summary['total_records'] = total_records
         summary['unmatched_records'] = unmatched_records
         return summary
-    
+
     def _load_community_profiles(self):
         """加载社区档案数据。
 
@@ -823,7 +823,7 @@ class CommunityRiskService:
                 'message': 'Community 表当前无法读取，本次不生成社区风险排名。',
             }
             current_app.logger.exception('Community 表查询或档案加载失败')
-    
+
     def _setup_default_communities(self):
         """设置默认社区配置"""
         coords_map = {}
@@ -843,7 +843,7 @@ class CommunityRiskService:
             {'name': '谭家新村', 'population': 145, 'elderly_ratio': 0.35, 'chronic_disease_ratio': 0.09},
             {'name': '新屋汪家', 'population': 92, 'elderly_ratio': 0.48, 'chronic_disease_ratio': 0.16},
         ]
-        
+
         for i, comm in enumerate(default_communities):
             coords = coords_map.get(comm['name']) if coords_map else None
             proxy = self._stable_proxy_profile(comm['name'])
@@ -868,16 +868,16 @@ class CommunityRiskService:
                 'medical_accessibility': proxy['medical_accessibility'],
                 'baseline_visits': self._estimate_baseline_visits(comm['population'])
             }
-    
+
     def calculate_vulnerability_index(self, community_data):
         """
         计算社区脆弱性指数 (Vulnerability Index)
-        
+
         公式: VI_c = 1 + a*老龄率 + b*慢病率 - d*绿地率 + e*热岛指数 - f*医疗可达性
-        
+
         参数:
         - community_data: 社区数据字典
-        
+
         返回:
         - vi: 脆弱性指数（>1表示比平均更脆弱）
         - breakdown: 各因子贡献分解
@@ -888,7 +888,7 @@ class CommunityRiskService:
         green_ratio = community_data.get('green_space_ratio', 0.1)
         heat_island = community_data.get('heat_island_index', 0.5)
         medical_access = community_data.get('medical_accessibility', 0.5)
-        
+
         # 计算各因子贡献
         breakdown = {
             'elderly_contribution': self.vi_weights['elderly_ratio'] * elderly_ratio,
@@ -897,15 +897,15 @@ class CommunityRiskService:
             'heat_island_contribution': self.vi_weights['heat_island_index'] * heat_island,
             'medical_contribution': self.vi_weights['medical_accessibility'] * medical_access
         }
-        
+
         # 计算VI
         vi = 1.0
         for contribution in breakdown.values():
             vi += contribution
-        
+
         # 确保VI >= 0.5
         vi = max(0.5, vi)
-        
+
         # 确定脆弱性等级
         if vi >= 1.5:
             level = '高脆弱性'
@@ -916,7 +916,7 @@ class CommunityRiskService:
         else:
             level = '低脆弱性'
             color = 'success'
-        
+
         return {
             'vulnerability_index': round(vi, 3),
             'level': level,
@@ -926,34 +926,34 @@ class CommunityRiskService:
                             f'主要因素：老龄率贡献{breakdown["elderly_contribution"]:.2f}，'
                             f'慢病率贡献{breakdown["chronic_contribution"]:.2f}'
         }
-    
+
     def calculate_community_risk_score(self, community_name, weather_rr, target_date=None):
         """
         计算社区风险得分
-        
+
         公式: RiskScore_c(t) = MacroRR(t) × VI_c × BaselineRate_c
-        
+
         参数:
         - community_name: 社区名称
         - weather_rr: 宏观天气相对风险
         - target_date: 目标日期
-        
+
         返回:
         - risk_score: 风险得分
         - details: 详细信息
         """
         if community_name not in self.community_profiles:
             return {'error': f'社区 {community_name} 未找到'}
-        
+
         profile = self.community_profiles[community_name]
-        
+
         # 计算VI
         vi_result = self.calculate_vulnerability_index(profile)
         vi = vi_result['vulnerability_index']
-        
+
         # 获取基线门诊率
         baseline_rate = profile.get('baseline_visits', 5)
-        
+
         # 标准化输入RR，避免非数值污染
         try:
             weather_rr = float(weather_rr)
@@ -982,7 +982,7 @@ class CommunityRiskService:
             'efold': self.excess_score_efold,
             'hazard': normalized_score,
         }
-        
+
         # 确定风险等级
         if normalized_score >= self.risk_level_thresholds['high']:
             risk_level = '高风险'
@@ -993,7 +993,7 @@ class CommunityRiskService:
         else:
             risk_level = '低风险'
             color = 'success'
-        
+
         return {
             'community': community_name,
             'risk_score': round(risk_score, 2),
@@ -1012,7 +1012,7 @@ class CommunityRiskService:
             'elderly_ratio': profile.get('elderly_ratio', 0),
             'expected_excess_visits': round(excess_risk_score, 1)
         }
-    
+
     def generate_community_risk_map(self, weather_data, target_date=None, window_days=30, disease_filter='', community_scope=None):
         """
         生成社区风险地图数据（学术增强版）。
@@ -1658,13 +1658,13 @@ class CommunityRiskService:
             ],
             'management_suggestions': management_suggestions
         }
-    
+
     def _generate_management_suggestions(self, high_risk_communities, weather_data):
         """生成管控建议（医生端）"""
         suggestions = []
-        
+
         temp = weather_data.get('temperature', 20)
-        
+
         # 资源调度建议
         if len(high_risk_communities) >= 3:
             suggestions.append({
@@ -1673,7 +1673,7 @@ class CommunityRiskService:
                 'advice': f'建议向 {high_risk_communities[0]["community"]}、{high_risk_communities[1]["community"]} 等高风险社区增派医疗资源',
                 'target_communities': [c['community'] for c in high_risk_communities[:3]]
             })
-        
+
         # 巡访建议。比率缺失表示该行已抑制，不把精确老龄率、慢病率或 VI 写进文本。
         for comm in high_risk_communities[:3]:
             elderly_ratio = comm.get('elderly_ratio')
@@ -1686,7 +1686,7 @@ class CommunityRiskService:
                     'advice': f'{comm["community"]} 老龄化程度高({elderly_ratio*100:.0f}%)，建议加强独居老人巡访',
                     'target_communities': [comm['community']]
                 })
-        
+
         # 温度相关建议
         if temp > 32:
             suggestions.append({
@@ -1702,7 +1702,7 @@ class CommunityRiskService:
                 'advice': '低温天气，建议检查高风险社区供暖情况、关注独居老人',
                 'target_communities': [c['community'] for c in high_risk_communities]
             })
-        
+
         # 门诊准备。抑制行的超额人次已置空，不能把 None 加进来，也不能写回建议文本。
         total_excess = _sum_published_excess(high_risk_communities)
         if total_excess is not None and total_excess > 10:
@@ -1712,7 +1712,7 @@ class CommunityRiskService:
                 'advice': f'预计高风险社区额外增加约 {total_excess:.0f} 人次就诊，建议门诊做好准备',
                 'target_communities': [c['community'] for c in high_risk_communities]
             })
-        
+
         if not suggestions:
             suggestions.append({
                 'category': '常规管理',
@@ -1720,13 +1720,13 @@ class CommunityRiskService:
                 'advice': '各社区风险处于正常水平，保持常规健康管理工作',
                 'target_communities': []
             })
-        
+
         return suggestions
-    
+
     def update_community_sensitivity(self, community_name, heat_sensitivity=None, cold_sensitivity=None):
         """
         更新社区天气敏感性参数 (v_c)
-        
+
         这是模型中的关键参数，表示社区对高温/寒冷的额外敏感性
         """
         if community_name not in self.community_sensitivity:
@@ -1734,13 +1734,13 @@ class CommunityRiskService:
                 'heat_sensitivity': 1.0,
                 'cold_sensitivity': 1.0
             }
-        
+
         if heat_sensitivity is not None:
             self.community_sensitivity[community_name]['heat_sensitivity'] = heat_sensitivity
-        
+
         if cold_sensitivity is not None:
             self.community_sensitivity[community_name]['cold_sensitivity'] = cold_sensitivity
-    
+
     def _apply_case_count_k_anonymity(self, rankings):
         """裁剪即将返回的村级就诊计数。风险指数已算完，这里只改公开字段。
 
@@ -1889,7 +1889,7 @@ class CommunityRiskService:
                 return self.sanitize_community_public_stats(profile)
             return profile
         return None
-    
+
     def get_all_communities(self, respect_access=False):
         """获取所有社区列表。respect_access=True 时只按裁剪后的脆弱性指数排序。"""
         communities = []
@@ -1932,30 +1932,30 @@ if __name__ == '__main__':
     print("=" * 60)
     print("社区风险评估服务测试")
     print("=" * 60)
-    
+
     service = CommunityRiskService()
-    
+
     print("\n所有社区列表:")
     communities = service.get_all_communities()
     for comm in communities:
         print(f"  {comm['name']}: VI={comm['vulnerability_index']:.2f}, "
               f"老龄率={comm['elderly_ratio']*100:.0f}%, "
               f"级别={comm['vulnerability_level']}")
-    
+
     print("\n社区风险地图生成测试:")
     weather = {'temperature': 35, 'humidity': 80, 'aqi': 120}
     result = service.generate_community_risk_map(weather)
-    
+
     print(f"\n风险摘要:")
     print(f"  高风险社区: {result['summary']['high_risk_count']} 个")
     print(f"  中风险社区: {result['summary']['medium_risk_count']} 个")
     print(f"  低风险社区: {result['summary']['low_risk_count']} 个")
-    
+
     print("\n风险排名Top 3:")
     for r in result['rankings'][:3]:
         print(f"  {r['rank']}. {r['community']}: "
               f"风险分数={r['risk_score']}, {r['risk_level']}")
-    
+
     print("\n管控建议:")
     for s in result['management_suggestions']:
         print(f"  [{s['priority']}] {s['category']}: {s['advice']}")
