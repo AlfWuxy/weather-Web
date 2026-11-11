@@ -638,9 +638,10 @@ def _assert_vulnerability_outputs_follow_suppression(result):
         feature_formula = features[name]["hazard_formula"]
         if row["suppressed"]:
             assert vulnerability[name] is None
-            if name in priority_items:
-                assert priority_items[name].get("svi_percentile") is None
-                assert priority_items[name].get("equity_stratum") is None
+            assert name not in priority_items
+            assert features[name].get("color") is None
+            assert row.get("impact_bucket") is None
+            assert row.get("certainty") is None
             _assert_formula_has_no_precise_values(feature_formula)
             assert features[name].get("risk_contributions") == {}
             assert _svi_attack_estimates(features[name]) == []
@@ -660,13 +661,14 @@ def _assert_vulnerability_outputs_follow_suppression(result):
             assert features[name].get("hotspot_category") is None
             assert features[name].get("risk_level") is None
             assert _recover_svi_from_decomposition(features[name]) is None
-            if name in priority_items:
-                assert priority_items[name].get("risk_index") is None
-                assert priority_items[name].get("heatrisk_level") is None
-                assert priority_items[name].get("uncertainty_index") is None
             for advice in advices:
                 assert name not in advice or "老龄化程度高(" not in advice
+            for suggestion in result["management_suggestions"]:
+                assert name not in (suggestion.get("target_communities") or [])
         else:
+            assert features[name].get("color") in {"danger", "warning", "success"}
+            assert row.get("impact_bucket") in {"low", "medium", "high", "very_high"}
+            assert row.get("certainty") in {"high", "medium", "low", "unavailable"}
             assert vulnerability[name] == row["svi_percentile"]
             if name in priority_items:
                 assert priority_items[name].get("svi_percentile") == row["svi_percentile"]
@@ -1419,3 +1421,437 @@ def test_suppressed_rows_clear_public_risk_level_and_matrix(monkeypatch):
         assert rows[name]["risk_level"] is None
         assert authorized_features[name]["risk_level"] is None
     _assert_vulnerability_outputs_follow_suppression(authorized)
+
+
+_THRESHOLD_ACTIONS = {
+    "优先安排巡访与高风险人群随访，必要时增加临时接诊能力。",
+    "优先补全数据与病例核验，避免高脆弱社区因样本不足低估风险。",
+    "优先开展健康宣教与分层干预，提前准备防暑/防寒资源。",
+}
+
+
+def _profile_for_summary_leak(name, population, elderly_ratio, latitude, longitude):
+    return {
+        "id": name,
+        "name": name,
+        "location": name,
+        "latitude": latitude,
+        "longitude": longitude,
+        "population": population,
+        "elderly_ratio": elderly_ratio,
+        "chronic_disease_ratio": 0.12,
+        "raw_population": population,
+        "raw_elderly_ratio": elderly_ratio,
+        "raw_chronic_disease_ratio": 0.12,
+        "green_space_ratio": 0.1,
+        "heat_island_index": 0.5,
+        "medical_accessibility": 0.6,
+        "baseline_visits": 5.0,
+    }
+
+
+def _heatrisk_counts_of(rows):
+    counts = {str(level): 0 for level in range(5)}
+    for row in rows:
+        level = row.get("heatrisk_level")
+        if isinstance(level, int) and not isinstance(level, bool):
+            counts[str(level)] += 1
+    return counts
+
+
+def _hotspot_counts_of(rows):
+    counts = {}
+    for row in rows:
+        label = row.get("hotspot_category")
+        if isinstance(label, str) and label:
+            counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def _quartile_counts_of(result):
+    return {
+        item["stratum"]: item["count"]
+        for item in result["equity_stratification"]["quartiles"]
+    }
+
+
+def _visible_quartile_counts(rows):
+    counts = {"Q1": 0, "Q2": 0, "Q3": 0, "Q4": 0}
+    for row in rows:
+        stratum = row.get("equity_stratum")
+        if stratum in counts:
+            counts[stratum] += 1
+    return counts
+
+
+def _matrix_signature(counts):
+    levels = ["low", "medium", "high", "very_high"]
+    return {
+        impact: {
+            likelihood: int(counts.get(impact, {}).get(likelihood, 0))
+            for likelihood in levels
+        }
+        for impact in levels
+    }
+
+
+def _one_hot_matrix(impact, likelihood):
+    signature = _matrix_signature({})
+    signature[impact][likelihood] = 1
+    return signature
+
+
+def _count_residual(published, visible):
+    keys = set(published) | set(visible)
+    return {
+        key: int(published.get(key, 0)) - int(visible.get(key, 0))
+        for key in keys
+    }
+
+
+def _assert_residual_hides(published, visible, hidden):
+    residual = _count_residual(published, visible)
+    assert all(value == 0 for value in residual.values())
+    assert any(int(value) > 0 for value in hidden.values())
+    assert residual != hidden
+
+
+def _rounded_median(values):
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return None
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        median = ordered[mid]
+    else:
+        median = (ordered[mid - 1] + ordered[mid]) / 2.0
+    return round(median, 1)
+
+
+def _disable_publication_suppression(monkeypatch, risk_module):
+    monkeypatch.setattr(risk_module, "_ranking_demographics_hidden", lambda name, sample: False)
+    monkeypatch.setattr(
+        risk_module,
+        "_case_count_publication",
+        lambda name, sample: {"hide": False, "suppressed": False, "redacted": False},
+    )
+
+
+def _assert_suppressed_row_hides_thresholds(row, feature, truth_row):
+    assert row["suppressed"] is True
+    assert row["impact_bucket"] is None
+    assert row["certainty"] is None
+    assert feature.get("color") is None
+    assert truth_row["impact_bucket"] in {"low", "medium", "high", "very_high"}
+    assert truth_row["certainty"] in {"high", "medium", "low"}
+    assert truth_row["color"] in {"danger", "warning", "success"}
+    assert row["impact_bucket"] != truth_row["impact_bucket"]
+    assert row["certainty"] != truth_row["certainty"]
+    assert feature.get("color") != truth_row["color"]
+
+
+def _priority_names(result):
+    return [
+        item["community"]
+        for item in result["equity_stratification"]["priority_communities"]
+    ]
+
+
+def _assert_priority_excludes_suppressed(public, truth, hidden_names):
+    public_names = _priority_names(public)
+    truth_names = _priority_names(truth)
+    hidden_names = set(hidden_names)
+    assert hidden_names.isdisjoint(public_names)
+    assert public_names == [name for name in truth_names if name not in hidden_names]
+    hidden_in_truth = [name for name in truth_names if name in hidden_names]
+    assert hidden_in_truth
+    assert public_names != truth_names
+    for item in public["equity_stratification"]["priority_communities"]:
+        assert item["community"] not in hidden_names
+        assert item.get("recommended_action") not in (None, "")
+    truth_actions = {
+        item["community"]: item.get("recommended_action")
+        for item in truth["equity_stratification"]["priority_communities"]
+    }
+    for name in hidden_in_truth:
+        assert truth_actions[name] in _THRESHOLD_ACTIONS
+
+
+def test_single_suppressed_village_summary_is_not_exact(monkeypatch):
+    """只有一个村子且被抑制时，汇总不能等于该村的精确档位、中位数或分位人数。"""
+    from flask import Flask
+    import services.community_risk_service as risk_module
+
+    _pin_ranking_threshold(monkeypatch)
+
+    def counts(self, *args, **kwargs):
+        return {
+            "window_days": 30,
+            "counts_by_community": {"独村": 2},
+            "matched_records": 2,
+            "total_records": 2,
+            "unmatched_records": 0,
+        }
+
+    monkeypatch.setattr(CommunityRiskService, "_collect_medical_counts", counts)
+    service = CommunityRiskService()
+    service.community_profiles = {
+        "独村": _profile_for_summary_leak("独村", 4, 0.62, 29.35, 116.37),
+    }
+    original_hidden = risk_module._ranking_demographics_hidden
+    original_publication = risk_module._case_count_publication
+    _disable_publication_suppression(monkeypatch, risk_module)
+    truth = service.generate_community_risk_map({"temperature": 30})
+    truth_row = _ranking_rows(truth)["独村"]
+    truth_feature = truth["map_data"]["features"][0]["properties"]
+    truth_row["color"] = truth_feature["color"]
+    assert truth["summary"]["heatrisk_counts"] == _heatrisk_counts_of([truth_row])
+    assert sum(truth["summary"]["heatrisk_counts"].values()) == 1
+    assert truth["summary"]["median_uncertainty_index"] == truth_row["uncertainty_index"]
+    assert truth_row["uncertainty_index"] is not None
+    assert sum(truth["summary"]["hotspot_counts"].values()) == 1
+    assert sum(sum(row.values()) for row in truth["impact_likelihood_matrix"]["counts"].values()) == 1
+    truth_quartiles = _quartile_counts_of(truth)
+    assert sum(truth_quartiles.values()) == 1
+    assert truth_row["equity_stratum"] in truth_quartiles
+    assert truth_quartiles[truth_row["equity_stratum"]] == 1
+
+    monkeypatch.setattr(risk_module, "_ranking_demographics_hidden", original_hidden)
+    monkeypatch.setattr(risk_module, "_case_count_publication", original_publication)
+    app = Flask("single-suppressed-summary")
+    with app.test_request_context():
+        public = service.generate_community_risk_map({"temperature": 30})
+
+    public_row = _ranking_rows(public)["独村"]
+    public_feature = {
+        feature["properties"]["name"]: feature["properties"]
+        for feature in public["map_data"]["features"]
+    }["独村"]
+    _assert_suppressed_row_hides_thresholds(public_row, public_feature, truth_row)
+    _assert_priority_excludes_suppressed(public, truth, {"独村"})
+
+    published_heat = public["summary"]["heatrisk_counts"]
+    hidden_heat = _heatrisk_counts_of([truth_row])
+    assert published_heat != hidden_heat
+    assert all(value == 0 for value in published_heat.values())
+    assert public["summary"]["median_uncertainty_index"] is None
+    assert public["summary"]["median_uncertainty_index"] != truth_row["uncertainty_index"]
+    published_hotspot = public["summary"]["hotspot_counts"]
+    hidden_hotspot = _hotspot_counts_of([truth_row])
+    assert _count_residual(published_hotspot, {}) != hidden_hotspot
+    assert all(value == 0 for value in published_hotspot.values())
+    published_matrix = _matrix_signature(public["impact_likelihood_matrix"]["counts"])
+    hidden_matrix = _one_hot_matrix(truth_row["impact_bucket"], truth_row["likelihood_bucket"])
+    assert published_matrix != hidden_matrix
+    assert all(value == 0 for row in published_matrix.values() for value in row.values())
+    published_quartiles = _quartile_counts_of(public)
+    assert published_quartiles != truth_quartiles
+    assert all(value == 0 for value in published_quartiles.values())
+    empty_avgs = [
+        item["avg_risk_index"]
+        for item in public["equity_stratification"]["quartiles"]
+    ]
+    assert empty_avgs == [None, None, None, None]
+    assert public["summary"]["high_risk_count"] == 0
+    assert public["summary"]["medium_risk_count"] == 0
+    assert public["summary"]["low_risk_count"] == 0
+    assert public["summary"]["equity_priority_count"] == 0
+
+
+def test_multi_village_summaries_cannot_be_subtracted(monkeypatch):
+    """多村时，公开汇总减去仍可见的行，不能还原被抑制村子的档位或分位人数。"""
+    from flask import Flask
+    import services.community_risk_service as risk_module
+
+    _pin_ranking_threshold(monkeypatch)
+
+    def counts(self, *args, **kwargs):
+        return {
+            "window_days": 30,
+            "counts_by_community": {"甲村": 30, "乙村": 12, "丙村": 1, "丁村": 4},
+            "matched_records": 47,
+            "total_records": 47,
+            "unmatched_records": 0,
+        }
+
+    monkeypatch.setattr(CommunityRiskService, "_collect_medical_counts", counts)
+    service = CommunityRiskService()
+    service.community_profiles = {
+        "甲村": _profile_for_summary_leak("甲村", 200, 0.2, 29.37, 116.35),
+        "乙村": _profile_for_summary_leak("乙村", 180, 0.28, 29.33, 116.40),
+        "丙村": _profile_for_summary_leak("丙村", 40, 0.72, 29.40, 116.32),
+        "丁村": _profile_for_summary_leak("丁村", 90, 0.55, 29.30, 116.44),
+    }
+    original_hidden = risk_module._ranking_demographics_hidden
+    original_publication = risk_module._case_count_publication
+    _disable_publication_suppression(monkeypatch, risk_module)
+    truth = service.generate_community_risk_map({"temperature": 30})
+    truth_rows = _ranking_rows(truth)
+    truth_features = {
+        feature["properties"]["name"]: feature["properties"]
+        for feature in truth["map_data"]["features"]
+    }
+    for name, row in truth_rows.items():
+        row["color"] = truth_features[name]["color"]
+        assert row["uncertainty_index"] is not None
+        assert row["likelihood_bucket"] in {"low", "medium", "high", "very_high"}
+
+    monkeypatch.setattr(risk_module, "_ranking_demographics_hidden", original_hidden)
+    monkeypatch.setattr(risk_module, "_case_count_publication", original_publication)
+
+    def authorize(name):
+        return name in {"甲村", "乙村"}
+
+    monkeypatch.setattr(risk_module, "_can_view_community_health_stats", authorize)
+    app = Flask("multi-suppressed-summary")
+    with app.test_request_context():
+        many_hidden = service.generate_community_risk_map({"temperature": 30})
+
+    many_rows = _ranking_rows(many_hidden)
+    many_features = {
+        feature["properties"]["name"]: feature["properties"]
+        for feature in many_hidden["map_data"]["features"]
+    }
+    hidden_names = {"丙村", "丁村"}
+    visible_rows = [many_rows[name] for name in ("甲村", "乙村")]
+    hidden_truth = [truth_rows[name] for name in hidden_names]
+    assert {name for name, row in many_rows.items() if row["suppressed"]} == hidden_names
+    for name in hidden_names:
+        _assert_suppressed_row_hides_thresholds(
+            many_rows[name], many_features[name], truth_rows[name]
+        )
+    _assert_priority_excludes_suppressed(many_hidden, truth, hidden_names)
+
+    visible_heat = _heatrisk_counts_of(visible_rows)
+    hidden_heat = _heatrisk_counts_of(hidden_truth)
+    _assert_residual_hides(many_hidden["summary"]["heatrisk_counts"], visible_heat, hidden_heat)
+    visible_hotspot = _hotspot_counts_of(visible_rows)
+    hidden_hotspot = _hotspot_counts_of(hidden_truth)
+    _assert_residual_hides(many_hidden["summary"]["hotspot_counts"], visible_hotspot, hidden_hotspot)
+    visible_matrix = _matrix_signature({})
+    for row in visible_rows:
+        visible_matrix[row["impact_bucket"]][row["likelihood_bucket"]] += 1
+    hidden_matrix = _matrix_signature({})
+    for row in hidden_truth:
+        hidden_matrix[row["impact_bucket"]][row["likelihood_bucket"]] += 1
+    published_matrix = _matrix_signature(many_hidden["impact_likelihood_matrix"]["counts"])
+    matrix_residual = {
+        impact: _count_residual(published_matrix[impact], visible_matrix[impact])
+        for impact in published_matrix
+    }
+    assert all(value == 0 for row in matrix_residual.values() for value in row.values())
+    assert matrix_residual != hidden_matrix
+    for row in hidden_truth:
+        assert matrix_residual != _one_hot_matrix(row["impact_bucket"], row["likelihood_bucket"])
+
+    visible_quartiles = _visible_quartile_counts(visible_rows)
+    hidden_quartiles = _visible_quartile_counts(hidden_truth)
+    published_quartiles = _quartile_counts_of(many_hidden)
+    _assert_residual_hides(published_quartiles, visible_quartiles, hidden_quartiles)
+    for item in many_hidden["equity_stratification"]["quartiles"]:
+        if visible_quartiles[item["stratum"]] == 0:
+            assert item["count"] == 0
+            assert item["avg_risk_index"] is None
+            assert item["high_heatrisk_count"] == 0
+
+    visible_uncertainty = [row["uncertainty_index"] for row in visible_rows]
+    assert many_hidden["summary"]["median_uncertainty_index"] == _rounded_median(visible_uncertainty)
+    all_uncertainty = visible_uncertainty + [row["uncertainty_index"] for row in hidden_truth]
+    assert _rounded_median(all_uncertainty) != many_hidden["summary"]["median_uncertainty_index"]
+    for row in hidden_truth:
+        assert many_hidden["summary"]["median_uncertainty_index"] != row["uncertainty_index"]
+
+    def authorize_two(name):
+        return name != "丙村"
+
+    monkeypatch.setattr(risk_module, "_can_view_community_health_stats", authorize_two)
+    single_app = Flask("one-suppressed-among-many")
+    with single_app.test_request_context():
+        one_hidden = service.generate_community_risk_map({"temperature": 30})
+
+    one_rows = _ranking_rows(one_hidden)
+    one_features = {
+        feature["properties"]["name"]: feature["properties"]
+        for feature in one_hidden["map_data"]["features"]
+    }
+    assert one_rows["丙村"]["suppressed"] is True
+    assert all(not one_rows[name]["suppressed"] for name in ("甲村", "乙村", "丁村"))
+    _assert_suppressed_row_hides_thresholds(
+        one_rows["丙村"], one_features["丙村"], truth_rows["丙村"]
+    )
+    _assert_priority_excludes_suppressed(one_hidden, truth, {"丙村"})
+    one_visible = [one_rows[name] for name in ("甲村", "乙村", "丁村")]
+    hidden_only = truth_rows["丙村"]
+    one_visible_heat = _heatrisk_counts_of(one_visible)
+    one_hidden_heat = _heatrisk_counts_of([hidden_only])
+    _assert_residual_hides(one_hidden["summary"]["heatrisk_counts"], one_visible_heat, one_hidden_heat)
+    assert one_hidden["summary"]["heatrisk_counts"] != one_hidden_heat
+    assert one_hidden["summary"]["median_uncertainty_index"] == _rounded_median(
+        [row["uncertainty_index"] for row in one_visible]
+    )
+    assert one_hidden["summary"]["median_uncertainty_index"] != hidden_only["uncertainty_index"]
+    one_visible_matrix = _matrix_signature({})
+    for row in one_visible:
+        one_visible_matrix[row["impact_bucket"]][row["likelihood_bucket"]] += 1
+    one_published_matrix = _matrix_signature(one_hidden["impact_likelihood_matrix"]["counts"])
+    one_matrix_residual = {
+        impact: _count_residual(one_published_matrix[impact], one_visible_matrix[impact])
+        for impact in one_published_matrix
+    }
+    assert all(value == 0 for row in one_matrix_residual.values() for value in row.values())
+    assert one_matrix_residual != _one_hot_matrix(
+        hidden_only["impact_bucket"], hidden_only["likelihood_bucket"]
+    )
+    one_visible_quartiles = _visible_quartile_counts(one_visible)
+    one_hidden_quartiles = _visible_quartile_counts([hidden_only])
+    _assert_residual_hides(
+        _quartile_counts_of(one_hidden),
+        one_visible_quartiles,
+        one_hidden_quartiles,
+    )
+    _assert_residual_hides(
+        one_hidden["summary"]["hotspot_counts"],
+        _hotspot_counts_of(one_visible),
+        _hotspot_counts_of([hidden_only]),
+    )
+
+
+def test_public_priority_list_drops_suppressed_risk_order():
+    """抑制社区不按抑制前风险留在优先名单里，行动文案也不再暴露阈值。"""
+    from services.community_risk_service import _public_priority_rows
+
+    high = {
+        "community": "乙村",
+        "risk_index": 91.0,
+        "svi_percentile": 88.0,
+        "equity_stratum": "Q4",
+        "heatrisk_level": 4,
+        "uncertainty_index": 20.0,
+        "recommended_action": "优先安排巡访与高风险人群随访，必要时增加临时接诊能力。",
+    }
+    middle = {
+        "community": "甲村",
+        "risk_index": 40.0,
+        "svi_percentile": 30.0,
+        "equity_stratum": "Q2",
+        "heatrisk_level": 1,
+        "uncertainty_index": 10.0,
+        "recommended_action": "优先开展健康宣教与分层干预，提前准备防暑/防寒资源。",
+    }
+    next_high = {
+        "community": "丙村",
+        "risk_index": 77.0,
+        "svi_percentile": 81.0,
+        "equity_stratum": "Q4",
+        "heatrisk_level": 3,
+        "uncertainty_index": 80.0,
+        "recommended_action": "优先补全数据与病例核验，避免高脆弱社区因样本不足低估风险。",
+    }
+    published = _public_priority_rows([high, middle, next_high], {"乙村", "丙村"})
+    assert [row["community"] for row in published] == ["甲村"]
+    assert high["recommended_action"] is None
+    assert next_high["recommended_action"] is None
+    assert high["risk_index"] is None
+    assert next_high["uncertainty_index"] is None
+    assert middle["recommended_action"] in _THRESHOLD_ACTIONS
+    assert published[0]["risk_index"] == 40.0
