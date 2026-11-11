@@ -722,6 +722,150 @@ def test_change_password_rejects_old_session_and_remember_cookie(app, client, db
     )
 
 
+def _hmac_password_stamp(secret, password_hash):
+    """独立计算约定算法，避免测试只转调生产 helper 而放行回退。"""
+    import hashlib
+    import hmac
+    if isinstance(secret, str):
+        key = secret.encode('utf-8')
+    else:
+        key = bytes(secret)
+    message = (password_hash or '').encode('utf-8')
+    return hmac.new(key, message, hashlib.sha256).hexdigest()[:16]
+
+
+def test_password_session_stamp_is_secret_bound_hmac(app, db_session):
+    """会话戳是 HMAC-SHA256(SECRET_KEY, password_hash)[:16]，不是无密钥 sha256。"""
+    import hashlib
+    from core.db_models import User
+
+    user = User(username='hmac_stamp_user', role='user')
+    user.set_password('StampPass123!')
+    db_session.add(user)
+    db_session.commit()
+
+    stamp = user.password_session_stamp()
+    legacy = hashlib.sha256((user.password_hash or '').encode('utf-8')).hexdigest()[:16]
+    assert stamp == _hmac_password_stamp(app.config['SECRET_KEY'], user.password_hash)
+    assert user.get_id() == f'{user.id}:{stamp}'
+    assert stamp != legacy
+
+    user.set_password('NewPass456!')
+    db_session.commit()
+    rotated = user.password_session_stamp()
+    assert rotated != stamp
+    assert rotated == _hmac_password_stamp(app.config['SECRET_KEY'], user.password_hash)
+
+
+def test_legacy_sha256_session_and_remember_fail_closed(app, db_session):
+    """部署后旧的无密钥 sha256 会话和 remember cookie 必须失败关闭。"""
+    import hashlib
+    from flask import g
+    from flask_login.utils import encode_cookie
+
+    from core.db_models import User
+    from core.extensions import login_manager
+
+    user = User(username='legacy_sha_stamp', role='user')
+    user.set_password('OldPass123!')
+    db_session.add(user)
+    db_session.commit()
+
+    legacy = hashlib.sha256((user.password_hash or '').encode('utf-8')).hexdigest()[:16]
+    legacy_id = f'{user.id}:{legacy}'
+    assert legacy_id != user.get_id()
+    load_user = login_manager._user_callback
+    assert load_user(legacy_id) is None
+    assert load_user(user.get_id()) is not None
+
+    g.pop('_login_user', None)
+    session_client = app.test_client()
+    with session_client.session_transaction() as session:
+        session['_user_id'] = legacy_id
+        session['_fresh'] = True
+    _assert_protected_page_rejected(
+        session_client.get('/profile', follow_redirects=False)
+    )
+
+    g.pop('_login_user', None)
+    remember_name = app.config.get('REMEMBER_COOKIE_NAME', 'remember_token')
+    remember_client = app.test_client()
+    remember_client.set_cookie(remember_name, encode_cookie(legacy_id))
+    _assert_protected_page_rejected(
+        remember_client.get('/profile', follow_redirects=False)
+    )
+
+
+def test_rotated_secret_invalidates_password_stamp(app, db_session):
+    """SECRET_KEY 轮换与改密都会使已签发的密码戳失效。"""
+    from core.db_models import User
+    from core.extensions import login_manager
+
+    user = User(username='stamp_secret_rotate', role='user')
+    user.set_password('OldPass123!')
+    db_session.add(user)
+    db_session.commit()
+    issued = user.get_id()
+    load_user = login_manager._user_callback
+
+    app.config['SECRET_KEY'] = 'rotated-secret-key-for-stamp'
+    assert load_user(issued) is None
+    rotated = user.get_id()
+    assert rotated != issued
+    assert rotated.split(':', 1)[1] == _hmac_password_stamp(
+        app.config['SECRET_KEY'], user.password_hash
+    )
+    assert load_user(rotated) is not None
+
+    user.set_password('NewPass456!')
+    db_session.commit()
+    assert load_user(rotated) is None
+    assert load_user(issued) is None
+    assert load_user(user.get_id()) is not None
+
+
+def test_password_stamp_requires_app_context():
+    """无应用上下文时不能退回无密钥摘要。"""
+    from core.db_models import User
+
+    user = User(username='noctx_stamp', role='user')
+    user.password_hash = 'pbkdf2:sha256:placeholder'
+    with pytest.raises(RuntimeError, match='应用上下文'):
+        user.password_session_stamp()
+
+
+def test_password_stamp_requires_secret_and_accepts_bytes_key(app, db_session):
+    """空密钥失败关闭；bytes 密钥按同样的 HMAC 规则签发。"""
+    from core.db_models import User
+    from core.extensions import login_manager
+
+    user = User(username='stamp_nokey', role='user')
+    user.set_password('OldPass123!')
+    db_session.add(user)
+    db_session.commit()
+    issued = user.get_id()
+    load_user = login_manager._user_callback
+
+    app.config['SECRET_KEY'] = b'bytes-secret-key-for-stamp'
+    bytes_id = user.get_id()
+    assert bytes_id != issued
+    assert bytes_id.split(':', 1)[1] == _hmac_password_stamp(
+        b'bytes-secret-key-for-stamp', user.password_hash
+    )
+    assert load_user(bytes_id) is not None
+    assert load_user(issued) is None
+
+    app.config['SECRET_KEY'] = ''
+    with pytest.raises(RuntimeError):
+        user.get_id()
+    assert load_user(bytes_id) is None
+
+    app.config['SECRET_KEY'] = None
+    with pytest.raises(RuntimeError):
+        user.password_session_stamp()
+    assert load_user(issued) is None
+
+
 def _risk_map_weather():
     return {
         'temperature': 30,

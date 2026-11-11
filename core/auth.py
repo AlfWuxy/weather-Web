@@ -36,7 +36,11 @@ def register_user_loader(login_manager):
             user = db.session.get(User, int(uid_part))
             if user is None or not user.password_hash:
                 return None
-            if not hmac.compare_digest(user.password_session_stamp(), stamp_part):
+            try:
+                expected_stamp = user.password_session_stamp()
+            except RuntimeError:
+                return None
+            if not hmac.compare_digest(expected_stamp, stamp_part):
                 return None
         except (ValueError, TypeError, OverflowError):
             return None
