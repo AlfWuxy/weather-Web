@@ -92,6 +92,18 @@ _SUPPRESSED_DECOMPOSITION_FIELDS = (
     'expected_excess_visits',
 )
 
+# heatrisk_level 由 risk_index 分档；uncertainty_index 与 hotspot_z/p 是连续派生量。
+# 抑制行留下它们，仍能还原被清空的风险指数和不确定度。
+_SUPPRESSED_DERIVED_HEAT_FIELDS = (
+    'heatrisk_level',
+    'heatrisk_label',
+    'heatrisk_color',
+    'uncertainty_index',
+    'hotspot_z',
+    'hotspot_p',
+    'hotspot_category',
+)
+
 
 def _community_min_sample_size():
     """最小公布样本。优先读 community_access，未提供时用应用配置。"""
@@ -248,13 +260,23 @@ def _null_suppressed_decomposition(container):
         container[field] = None
 
 
+def _null_suppressed_derived_heat_fields(container):
+    """清掉抑制对象上由风险指数、不确定度和热点统计推出的派生量。"""
+    if not isinstance(container, dict):
+        return
+    for field in _SUPPRESSED_DERIVED_HEAT_FIELDS:
+        if field in container:
+            container[field] = None
+
+
 def _suppress_reconstructable_risk_fields(row):
     """抑制行去掉可回推 VI 的公式分量，以及能解出 SVI 分位的风险分解。
 
     expected_excess_visits、危险度（公开 risk_score / weather_hazard_score）
     和 relative_index 留在抑制行上时，配公开 macro RR 与固定 baseline 能还原 VI。
     risk_index、uncertainty_penalty、burden_percentile、risk_weights 再配危险度，
-    可还原 svi_percentile。排名和综合预警的 top_risk 使用同一批行，所以一并置空。
+    可还原 svi_percentile。heatrisk_level、uncertainty_index、hotspot_z 是这些量的
+    派生结果，留下档位或连续值仍能还原。排名和综合预警的 top_risk 使用同一批行，所以一并置空。
     """
     formula = row.get('hazard_formula')
     if isinstance(formula, dict):
@@ -279,6 +301,7 @@ def _suppress_reconstructable_risk_fields(row):
     if isinstance(components, dict):
         for field in ('vulnerability_index', 'excess_risk_score', 'baseline_rate'):
             components[field] = None
+    _null_suppressed_derived_heat_fields(row)
 
 
 def _public_ranking_order_key(row):
@@ -321,20 +344,35 @@ def _order_public_risk_lists(rankings, map_data, layers):
 
 
 def _scrub_suppressed_quartile_risk(quartile_rows, strata_map):
-    """分位均值不能单独留下被抑制社区的 risk_index，也不能用全体均值做减法。"""
+    """分位均值不能单独留下被抑制社区的风险、不确定度或热风险档。"""
     for quartile in quartile_rows or []:
         members = (strata_map or {}).get(quartile.get('stratum'), [])
         if not any(isinstance(row, dict) and row.get('suppressed') for row in members):
             continue
+        visible = [
+            row for row in members
+            if isinstance(row, dict) and not row.get('suppressed')
+        ]
         visible_scores = [
             float(row['risk_index'])
-            for row in members
-            if isinstance(row, dict)
-            and not row.get('suppressed')
-            and _is_real_number(row.get('risk_index'))
+            for row in visible
+            if _is_real_number(row.get('risk_index'))
         ]
         quartile['avg_risk_index'] = (
             round(float(np.mean(visible_scores)), 1) if visible_scores else None
+        )
+        uncertainty_values = [
+            float(row['uncertainty_index'])
+            for row in visible
+            if _is_real_number(row.get('uncertainty_index'))
+        ]
+        quartile['avg_uncertainty'] = (
+            round(float(np.mean(uncertainty_values)), 1) if uncertainty_values else None
+        )
+        quartile['high_heatrisk_count'] = sum(
+            1
+            for row in visible
+            if _is_real_number(row.get('heatrisk_level')) and int(row['heatrisk_level']) >= 3
         )
 
 
@@ -1557,9 +1595,9 @@ class CommunityRiskService:
                     ),
                     'risk_contributions': row.get('risk_contributions', {}),
                     'hazard_formula': row.get('hazard_formula', {}),
-                    'heatrisk_level': row.get('heatrisk_level', 0),
-                    'heatrisk_label': row.get('heatrisk_label', '最小'),
-                    'heatrisk_color': row.get('heatrisk_color', '#16a34a'),
+                    'heatrisk_level': None if row.get('suppressed') else row.get('heatrisk_level', 0),
+                    'heatrisk_label': None if row.get('suppressed') else row.get('heatrisk_label', '最小'),
+                    'heatrisk_color': None if row.get('suppressed') else row.get('heatrisk_color', '#16a34a'),
                     'svi_percentile': row.get('svi_percentile', 0.0),
                     'theme_scores': row.get('theme_scores', {}),
                     'observed_cases': row.get('observed_cases'),
@@ -1573,10 +1611,12 @@ class CommunityRiskService:
                     'stats_suppressed': bool(row.get('stats_suppressed')),
                     'stats_redacted': bool(row.get('stats_redacted')),
                     'certainty': row.get('certainty', 'unavailable'),
-                    'uncertainty_index': row.get('uncertainty_index'),
-                    'hotspot_category': row.get('hotspot_category', '数据不足'),
-                    'hotspot_z': row.get('hotspot_z'),
-                    'hotspot_p': row.get('hotspot_p'),
+                    'uncertainty_index': None if row.get('suppressed') else row.get('uncertainty_index'),
+                    'hotspot_category': (
+                        None if row.get('suppressed') else row.get('hotspot_category', '数据不足')
+                    ),
+                    'hotspot_z': None if row.get('suppressed') else row.get('hotspot_z'),
+                    'hotspot_p': None if row.get('suppressed') else row.get('hotspot_p'),
                     'impact_bucket': row.get('impact_bucket', 'low'),
                     'likelihood_bucket': row.get('likelihood_bucket', 'low'),
                     'matrix_score': row.get('matrix_score', 1),
@@ -1770,7 +1810,8 @@ class CommunityRiskService:
         """按公开权限和样本阈值裁剪排名行上的人口学/脆弱性字段。
 
         隐藏时置空并标记 suppressed，同时清掉可回推 VI 的公式分量、
-        超额就诊、危险度、相对指数、风险分解，以及能反推 SVI 分位的贡献表和分位桶。
+        超额就诊、危险度、相对指数、风险分解、热风险档、不确定度、热点 z 值，
+        以及能反推 SVI 分位的贡献表和分位桶。
         这些行会进入排名和综合预警 top_risk。授权且样本达到 k 时保留精确值；
         若同时有抑制行，相对指数只按仍公开的 RiskScore 重算。
         公开顺序不再使用被抑制社区的风险指数，只按社区名稳定排列。
@@ -1813,6 +1854,7 @@ class CommunityRiskService:
                     formula['expression'] = _SUPPRESSED_HAZARD_FORMULA_NOTE
                     for field in _HAZARD_FORMULA_RECONSTRUCTABLE_FIELDS:
                         formula[field] = None
+                _null_suppressed_derived_heat_fields(props)
                 continue
             if name in visible_relative:
                 props['relative_index'] = visible_relative[name]
@@ -1820,7 +1862,7 @@ class CommunityRiskService:
 
     @staticmethod
     def _redact_suppressed_vulnerability_outputs(layers, priority_rows, hidden_names):
-        """抑制社区在图层和公平性清单里不再带 SVI 精确值或分位桶。"""
+        """抑制社区不再带 SVI、热风险档、不确定度或热点的精确派生量。"""
         hidden_names = set(hidden_names or [])
         if not hidden_names:
             return
@@ -1830,11 +1872,22 @@ class CommunityRiskService:
         for entry in (layers or {}).get('risk_index') or []:
             if entry.get('community') in hidden_names:
                 entry['value'] = None
+        for entry in (layers or {}).get('uncertainty') or []:
+            if isinstance(entry, dict) and entry.get('community') in hidden_names:
+                entry['value'] = None
+        for entry in (layers or {}).get('hotspot') or []:
+            if isinstance(entry, dict) and entry.get('community') in hidden_names:
+                entry['category'] = None
+                for field in ('value', 'z', 'hotspot_z', 'hotspot_p'):
+                    if field in entry:
+                        entry[field] = None
         for priority in priority_rows or []:
             if priority.get('community') in hidden_names:
                 priority['svi_percentile'] = None
                 priority['equity_stratum'] = None
                 priority['risk_index'] = None
+                priority['heatrisk_level'] = None
+                priority['uncertainty_index'] = None
 
     @staticmethod
     def _publish_ranking_demographics(row, profile):

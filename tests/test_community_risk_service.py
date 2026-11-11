@@ -545,6 +545,13 @@ def _assert_demographics_hidden(row):
     assert row["burden_percentile"] is None
     assert row["uncertainty_penalty"] is None
     assert row["risk_weights"] is None
+    assert row["heatrisk_level"] is None
+    assert row["heatrisk_label"] is None
+    assert row["heatrisk_color"] is None
+    assert row["uncertainty_index"] is None
+    assert row["hotspot_z"] is None
+    assert row["hotspot_p"] is None
+    assert row["hotspot_category"] is None
     assert _recover_svi_from_decomposition(row) is None
     assert _vi_from_published_excess(row["expected_excess_visits"], 1.5, 5.0) is None
 
@@ -589,6 +596,10 @@ def _assert_precise_demographics(row, service, name):
     estimates = _svi_attack_estimates(row)
     assert estimates
     assert min(abs(estimate - row["svi_percentile"]) for estimate in estimates) <= 0.1
+    assert isinstance(row["heatrisk_level"], int) and not isinstance(row["heatrisk_level"], bool)
+    assert row["heatrisk_label"]
+    assert row["hotspot_z"] is None or _is_real_number(row["hotspot_z"])
+    assert row["uncertainty_index"] is None or _is_real_number(row["uncertainty_index"])
     assert row["equity_stratum"] == _equity_stratum_for_svi(row["svi_percentile"])
 
 
@@ -601,6 +612,14 @@ def _assert_vulnerability_outputs_follow_suppression(result):
     risk_layers = {
         entry["community"]: entry["value"]
         for entry in result["layers"]["risk_index"]
+    }
+    uncertainty_layers = {
+        entry["community"]: entry["value"]
+        for entry in result["layers"]["uncertainty"]
+    }
+    hotspot_layers = {
+        entry["community"]: entry.get("category")
+        for entry in result["layers"]["hotspot"]
     }
     priority_items = {
         item["community"]: item
@@ -630,9 +649,16 @@ def _assert_vulnerability_outputs_follow_suppression(result):
             assert features[name]["risk_weights"] is None
             assert features[name]["expected_excess_visits"] is None
             assert risk_layers[name] is None
+            assert uncertainty_layers[name] is None
+            assert hotspot_layers[name] is None
+            assert features[name].get("heatrisk_level") is None
+            assert features[name].get("uncertainty_index") is None
+            assert features[name].get("hotspot_category") is None
             assert _recover_svi_from_decomposition(features[name]) is None
             if name in priority_items:
                 assert priority_items[name].get("risk_index") is None
+                assert priority_items[name].get("heatrisk_level") is None
+                assert priority_items[name].get("uncertainty_index") is None
             for advice in advices:
                 assert name not in advice or "老龄化程度高(" not in advice
         else:
@@ -650,6 +676,10 @@ def _assert_vulnerability_outputs_follow_suppression(result):
             assert features[name]["uncertainty_penalty"] == row["uncertainty_penalty"]
             assert features[name]["risk_weights"] == row["risk_weights"]
             assert risk_layers[name] == row["risk_index"]
+            assert uncertainty_layers[name] == row["uncertainty_index"]
+            assert hotspot_layers[name] == row["hotspot_category"]
+            assert features[name].get("heatrisk_level") == row["heatrisk_level"]
+            assert features[name].get("uncertainty_index") == row["uncertainty_index"]
             feature_estimates = _svi_attack_estimates(features[name])
             assert feature_estimates
             assert min(
@@ -1188,3 +1218,109 @@ def test_suppressed_excess_and_rr_cannot_reconstruct_vi(monkeypatch):
     assert authorized["summary"]["total_expected_excess"] != (
         authorized_row["expected_excess_visits"] + hidden_excess
     )
+
+
+def test_suppressed_rows_redact_derived_heatrisk_fields(monkeypatch):
+    """抑制行不公布 heatrisk_level、uncertainty_index、hotspot_z，图层精确值一并清空。
+
+    未抑制时这些派生量是实数。授权且样本达到 k 的社区仍保留原值。
+    """
+    from flask import Flask
+    import services.community_risk_service as risk_module
+
+    _pin_ranking_threshold(monkeypatch)
+    monkeypatch.setattr(
+        CommunityRiskService,
+        "_collect_medical_counts",
+        _historical_case_counts,
+    )
+    service = _service_with_demographic_profiles()
+    offsets = {
+        "小村": (0.02, 0.02),
+        "大村": (0.0, 0.0),
+        "外村": (-0.03, 0.01),
+        "缺人口": (0.01, -0.02),
+    }
+    for name, (dlat, dlon) in offsets.items():
+        service.community_profiles[name]["latitude"] = 29.35 + dlat
+        service.community_profiles[name]["longitude"] = 116.37 + dlon
+
+    original_hidden = risk_module._ranking_demographics_hidden
+    original_publication = risk_module._case_count_publication
+    monkeypatch.setattr(risk_module, "_ranking_demographics_hidden", lambda name, sample: False)
+    monkeypatch.setattr(
+        risk_module,
+        "_case_count_publication",
+        lambda name, sample: {"hide": False, "suppressed": False, "redacted": False},
+    )
+    truth = service.generate_community_risk_map({"temperature": 30})
+    truth_rows = _ranking_rows(truth)
+    assert any(isinstance(row["heatrisk_level"], int) for row in truth_rows.values())
+    assert any(_is_real_number(row["uncertainty_index"]) for row in truth_rows.values())
+    assert any(
+        _is_real_number(row["hotspot_z"]) and row["hotspot_z"] != 0
+        for row in truth_rows.values()
+    )
+    truth_uncertainty = {
+        entry["community"]: entry["value"] for entry in truth["layers"]["uncertainty"]
+    }
+    assert any(_is_real_number(value) for value in truth_uncertainty.values())
+
+    monkeypatch.setattr(risk_module, "_ranking_demographics_hidden", original_hidden)
+    monkeypatch.setattr(risk_module, "_case_count_publication", original_publication)
+
+    public_app = Flask("derived-heat-public")
+    with public_app.test_request_context():
+        public = service.generate_community_risk_map({"temperature": 30})
+
+    _assert_vulnerability_outputs_follow_suppression(public)
+    for name, row in _ranking_rows(public).items():
+        _assert_demographics_hidden(row)
+        assert row["heatrisk_level"] is None
+        assert row["uncertainty_index"] is None
+        assert row["hotspot_z"] is None
+        assert row["hotspot_p"] is None
+        leaked_level = truth_rows[name]["heatrisk_level"]
+        leaked_uncertainty = truth_rows[name]["uncertainty_index"]
+        leaked_z = truth_rows[name]["hotspot_z"]
+        assert _is_real_number(leaked_uncertainty)
+        assert _is_real_number(leaked_z)
+        assert row["heatrisk_level"] != leaked_level
+        assert row["uncertainty_index"] != leaked_uncertainty
+        assert row["hotspot_z"] != leaked_z
+
+    monkeypatch.setattr(
+        risk_module,
+        "_can_view_community_health_stats",
+        lambda name: name == "大村",
+    )
+    authorized_app = Flask("derived-heat-authorized")
+    with authorized_app.test_request_context():
+        authorized = service.generate_community_risk_map({"temperature": 30})
+
+    rows = _ranking_rows(authorized)
+    kept = rows["大村"]
+    _assert_precise_demographics(kept, service, "大村")
+    assert kept["heatrisk_level"] == truth_rows["大村"]["heatrisk_level"]
+    assert kept["heatrisk_label"] == truth_rows["大村"]["heatrisk_label"]
+    assert kept["heatrisk_color"] == truth_rows["大村"]["heatrisk_color"]
+    assert kept["uncertainty_index"] == truth_rows["大村"]["uncertainty_index"]
+    assert kept["hotspot_z"] == truth_rows["大村"]["hotspot_z"]
+    assert kept["hotspot_p"] == truth_rows["大村"]["hotspot_p"]
+    assert kept["hotspot_category"] == truth_rows["大村"]["hotspot_category"]
+    authorized_uncertainty = {
+        entry["community"]: entry["value"] for entry in authorized["layers"]["uncertainty"]
+    }
+    authorized_hotspot = {
+        entry["community"]: entry.get("category") for entry in authorized["layers"]["hotspot"]
+    }
+    assert authorized_uncertainty["大村"] == truth_uncertainty["大村"]
+    assert authorized_hotspot["大村"] == truth_rows["大村"]["hotspot_category"]
+    for name in ("小村", "外村", "缺人口"):
+        _assert_demographics_hidden(rows[name])
+        assert authorized_uncertainty[name] is None
+        assert authorized_hotspot[name] is None
+        assert rows[name]["hotspot_z"] is None
+        assert rows[name]["uncertainty_index"] is None
+        assert rows[name]["heatrisk_level"] is None
+    _assert_vulnerability_outputs_follow_suppression(authorized)
