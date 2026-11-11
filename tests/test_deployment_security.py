@@ -106,25 +106,26 @@ def test_https_proxy_template_fixes_origin_and_redirects_http():
     assert "ssl_certificate /etc/certs/fullchain.pem;" in text
     assert "ssl_certificate_key /etc/certs/privkey.pem;" in text
     assert 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' in text
-    elder = _nginx_location_blocks(text, "/e/")
     plain = _nginx_location_blocks(text, "/")
-    assert len(elder) == 2
     assert len(plain) == 2
-    assert "return 308 https://site.example$request_uri;" in elder[0]
-    assert "proxy_pass" not in elder[0]
-    https_elder = elder[1]
-    assert "access_log off;" in https_elder
-    assert "proxy_pass http://127.0.0.1:5000;" in https_elder
-    assert "proxy_set_header X-Forwarded-Proto https;" in https_elder
-    assert "proxy_set_header X-Forwarded-For $remote_addr;" in https_elder
-    assert 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' in https_elder
-    assert "$request_uri" not in https_elder
-    assert "$args" not in https_elder
-    for block in elder:
-        assert "access_log off;" in block
-        assert "access_log " not in block.replace("access_log off;", "")
-        assert "$http_referer" not in block
-        assert "$uri" not in block
+    for path in ("/e/", "/t/"):
+        blocks = _nginx_location_blocks(text, path)
+        assert len(blocks) == 2
+        assert "return 308 https://site.example$request_uri;" in blocks[0]
+        assert "proxy_pass" not in blocks[0]
+        https_block = blocks[1]
+        assert "access_log off;" in https_block
+        assert "proxy_pass http://127.0.0.1:5000;" in https_block
+        assert "proxy_set_header X-Forwarded-Proto https;" in https_block
+        assert "proxy_set_header X-Forwarded-For $remote_addr;" in https_block
+        assert 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' in https_block
+        assert "$request_uri" not in https_block
+        assert "$args" not in https_block
+        for block in blocks:
+            assert "access_log off;" in block
+            assert "access_log " not in block.replace("access_log off;", "")
+            assert "$http_referer" not in block
+            assert "$uri" not in block
     for block in plain:
         assert "access_log off;" not in block
     assert "proxy_pass http://127.0.0.1:5000;" in plain[1]

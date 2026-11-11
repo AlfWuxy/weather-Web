@@ -253,8 +253,8 @@ def secure_tree(project, user):
 
 def nginx_config(url, cert, key):
     host = public_hostname(url)
-    # /e/<token> 的路径和 query 都是行动链接凭据。只在该 location 关闭访问日志，
-    # 避免默认 combined 格式把完整 GET /e/<token> 写入 access_log。
+    # /e/<token> 与 /t/<delivery_token> 的路径和 query 都是凭据。只在这些 location
+    # 关闭访问日志，避免默认 combined 格式把完整 GET 写入 access_log。
     proxy = """        proxy_pass http://127.0.0.1:5000;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto https;
@@ -262,12 +262,16 @@ def nginx_config(url, cert, key):
         proxy_hide_header Strict-Transport-Security;
         add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;"""
     return f"""# 证书须由运维预置；仅本机回环连接应用。
-# /e/ 行动链接的 token 与 query 不进入 access_log。
+# /e/ 行动链接与 /t/ 投递链接的 token 与 query 不进入 access_log。
 server {{
     listen 80;
     listen [::]:80;
     server_name {host};
     location /e/ {{
+        access_log off;
+        return 308 https://{host}$request_uri;
+    }}
+    location /t/ {{
         access_log off;
         return 308 https://{host}$request_uri;
     }}
@@ -283,6 +287,10 @@ server {{
     ssl_certificate_key {key};
     ssl_protocols TLSv1.2 TLSv1.3;
     location /e/ {{
+        access_log off;
+{proxy}
+    }}
+    location /t/ {{
         access_log off;
 {proxy}
     }}
