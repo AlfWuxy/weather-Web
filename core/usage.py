@@ -11,7 +11,7 @@ import secrets
 from contextlib import contextmanager
 from datetime import timedelta
 
-from flask import current_app
+from flask import current_app, has_request_context
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy import inspect as sa_inspect
 
@@ -567,6 +567,45 @@ def _delete_oldest_usage_events(user_id, limit):
     return _run_on_caller_session(session, _delete)
 
 
+def _anonymous_event_quota_bucket():
+    """游客/匿名日配额桶：UTC 日 + 受信客户端 IP。
+
+    IP 解析与限流键相同（含受信代理），不用 user id。
+    没有请求或解析不到 IP 时返回 None，配额检查失败关闭。
+    """
+    if not has_request_context():
+        return None
+    try:
+        from core.security import _client_ip_for_rate_limit
+        client_ip = _client_ip_for_rate_limit()
+    except Exception:
+        return None
+    if not client_ip:
+        return None
+    return f"{_utc_day_start().date().isoformat()}:{client_ip}"
+
+
+def _consume_anonymous_daily_quota(bucket, limit):
+    """按 IP 扣减与个人日配额相同的次数。存储复用现有 Limiter。"""
+    from limits import parse
+
+    from core.extensions import limiter
+
+    try:
+        allowed = limiter.limiter.hit(
+            parse(f"{int(limit)} per day"),
+            "usage-event-anon-daily",
+            str(bucket),
+        )
+    except UsageQuotaError:
+        raise
+    except Exception as exc:
+        logger.debug("匿名事件日配额计数失败，异常类型=%s", type(exc).__name__)
+        raise UsageQuotaError(_USAGE_EVENT_QUOTA_MESSAGE) from exc
+    if not allowed:
+        raise UsageQuotaError(_USAGE_EVENT_QUOTA_MESSAGE)
+
+
 def _usage_event_values(event_type, user_id, pair_id, member_id, source, meta):
     payload = None
     safe_meta = sanitize_analytics_meta(event_type, meta)
@@ -595,6 +634,7 @@ def _write_usage_event_sql(
     global_daily_limit,
     daily_per_user,
     max_per_user,
+    anonymous_quota_bucket=None,
 ):
     if retention_days > 0:
         conn.execute(_event_delete_expired_statement(cutoff))
@@ -614,6 +654,12 @@ def _write_usage_event_sql(
                 user_total = _count_events(conn, user_id=resolved_user_id)
                 if user_total >= max_per_user:
                     raise UsageQuotaError(_USAGE_EVENT_QUOTA_MESSAGE)
+        elif daily_per_user > 0:
+            # 游客会话 id 不是 users 主键，个人配额对它不生效。
+            # 这里按受信 IP 补上同一日上限，避免只受全站日上限约束。
+            if not anonymous_quota_bucket:
+                raise UsageQuotaError(_USAGE_EVENT_QUOTA_MESSAGE)
+            _consume_anonymous_daily_quota(anonymous_quota_bucket, daily_per_user)
     else:
         if resolved_user_id is not None and max_per_user > 0:
             user_total = _count_events(conn, user_id=resolved_user_id)
@@ -644,6 +690,7 @@ def _usage_write_kwargs(event_type, resolved_user_id, pair_id, member_id, source
         'global_daily_limit': _config_int('USAGE_EVENT_GLOBAL_DAILY_LIMIT', 10000),
         'daily_per_user': _config_int('USAGE_EVENT_DAILY_PER_USER', 200),
         'max_per_user': _config_int('USAGE_EVENT_MAX_PER_USER', 1000),
+        'anonymous_quota_bucket': None,
     }
 
 
@@ -678,8 +725,12 @@ def log_usage_event(
     """Best-effort usage event logging (fail open).
 
     enforce_quota=True 时超限并抛出 UsageQuotaError。调用方事务里已有写入时不回滚它。
+    正式用户的日配额和存量上限仍只按 user_id 计数。
+    游客或匿名没有 users 主键；enforce_quota=True 时按受信客户端 IP 施加同一日配额，
+    并继续受全站日上限约束。解析不到 IP 时拒绝写入。
     内部写入（默认）在单用户存量达到上限时按 FIFO 淘汰最旧事件；
     全站当日达到日限额 2 倍硬保护时放弃写入并返回 None。
+    未开启 enforce_quota 的游客/匿名埋点不走这条 IP 日配额。
     会话空闲时，清理、计数和插入在同一条独立短事务里提交。
     调用方已有业务或审计写入时，事件留在该事务的保存点里，不 commit。
     """
@@ -697,6 +748,12 @@ def log_usage_event(
             event_type, resolved_user_id, pair_id, member_id, source, meta,
         )
         kwargs['enforce_quota'] = enforce_quota
+        if (
+            enforce_quota
+            and resolved_user_id is None
+            and kwargs.get('daily_per_user', 0) > 0
+        ):
+            kwargs['anonymous_quota_bucket'] = _anonymous_event_quota_bucket()
         if _can_use_external_connection(session):
             _release_clean_sqlite_read(session)
             return _log_usage_external(kwargs)

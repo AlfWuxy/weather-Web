@@ -526,6 +526,8 @@ def _apply_daybreak_security_config(app):
         'USAGE_EVENT_MAX_PER_USER',
         parse_int(os.getenv('USAGE_EVENT_MAX_PER_USER', '1000'), default=1000),
     )
+    # 正式用户按 user_id 计日配额。游客/匿名没有 users 主键，
+    # enforce_quota 时按受信客户端 IP 复用同一个数字（见 core.usage）。
     app.config.setdefault(
         'USAGE_EVENT_DAILY_PER_USER',
         parse_int(os.getenv('USAGE_EVENT_DAILY_PER_USER', '200'), default=200),
