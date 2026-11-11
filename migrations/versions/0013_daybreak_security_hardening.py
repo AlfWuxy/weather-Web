@@ -5,6 +5,7 @@ Revises: 0012_security_merge
 """
 import hashlib
 import os
+import stat
 
 from alembic import op
 import sqlalchemy as sa
@@ -34,6 +35,8 @@ def _repo_root():
 
 
 _EXAMPLE_PEPPERS = ('your-pair-token-pepper-here', 'change-me-min-32-chars')
+# group/other 可读或可写都算过宽。运行时写入后会 chmod 0o600。
+_PEPPER_GROUP_OTHER_ACCESS = stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH
 
 
 def _normalized_env(key, default=None):
@@ -58,21 +61,66 @@ def _debug_enabled():
     return False
 
 
+def _pepper_owner_check_relaxed():
+    """只在测试里放宽属主。符号链接和过宽权限仍然拒绝。"""
+    if os.getenv('PYTEST_CURRENT_TEST'):
+        return True
+    value = os.getenv('TESTING')
+    if value is None:
+        return False
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _pepper_file_is_private(info):
+    """普通文件、group/other 不可读不可写，且属主是当前 uid。"""
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        return False
+    if stat.S_IMODE(info.st_mode) & _PEPPER_GROUP_OTHER_ACCESS:
+        return False
+    if info.st_uid != os.getuid() and not _pepper_owner_check_relaxed():
+        return False
+    return True
+
+
 def _read_persisted_pair_token_pepper():
     """只读 Flask 默认 instance_path 下的 pair_token_pepper.txt，不创建、不覆盖。
 
     仅当 DEBUG 已打开，且 PAIR_TOKEN_PEPPER 与稳定 SECRET_KEY 都为空时调用，
-    对应 core.config.configure_app 的最后一档。读失败则中止：运行时会另生成
-    随机 pepper，迁移无法证明那是同一个值。
+    对应 core.config.configure_app 的最后一档。用 lstat 拒绝符号链接，再用
+    O_NOFOLLOW 打开最后一段，避免 open() 跟随链接。group/other 可读或可写、
+    属主不是当前 uid 的文件也不采用；测试环境只放宽属主。上述失败和读失败都
+    返回空串，让 upgrade 在仍有明文时走既有 RuntimeError，而不是换 pepper 擦除。
     """
     pepper_path = os.path.join(_repo_root(), 'instance', 'pair_token_pepper.txt')
     try:
-        with open(pepper_path, 'r', encoding='utf-8') as handle:
-            return handle.read().strip()
+        probed = os.lstat(pepper_path)
     except FileNotFoundError:
         return ''
-    except OSError as exc:
-        raise RuntimeError(f'读取 pepper 文件失败: {exc}') from exc
+    except OSError:
+        return ''
+    if not _pepper_file_is_private(probed):
+        return ''
+
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    fd = None
+    try:
+        fd = os.open(pepper_path, flags)
+        if not _pepper_file_is_private(os.fstat(fd)):
+            return ''
+        stream = os.fdopen(fd, 'r', encoding='utf-8')
+        fd = None
+        with stream:
+            return stream.read().strip()
+    except FileNotFoundError:
+        return ''
+    except OSError:
+        return ''
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def _migration_pair_token_pepper():
@@ -84,7 +132,7 @@ def _migration_pair_token_pepper():
 
     DEBUG 打开、且环境变量 pepper 为空时：
     1. 稳定 SECRET_KEY（环境变量非空）。运行时此时不读文件，也不再生成。
-    2. 否则只读 instance/pair_token_pepper.txt。
+    2. 否则只读 instance/pair_token_pepper.txt。符号链接、过宽权限或属主不符则视为空。
 
     运行时最后才会生成新 pepper。那个随机值无法在迁移里重现，所以这里不生成。
     返回空串且仍有未哈希明文时，upgrade 抛 RuntimeError，不用别的 pepper 哈希后再擦明文。
