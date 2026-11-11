@@ -531,3 +531,93 @@ def test_absolute_python_symlink_must_remain_trusted_after_resolution(tmp_path, 
     escaped.symlink_to(hop)
     assert helper._python_symlink_target_allowed(tmp_path, kept) is True
     assert helper._python_symlink_target_allowed(tmp_path, escaped) is False
+
+
+def test_relative_python_symlink_keeps_standard_venv_interpreter(tmp_path, monkeypatch):
+    helper = module("deployment_security")
+    trusted = tmp_path / "trusted-prefix"
+    (trusted / "bin").mkdir(parents=True)
+    system = trusted / "bin" / "python3"
+    system.write_text("#!/bin/sh\n")
+    system.chmod(0o755)
+    monkeypatch.setattr(helper, "_trusted_python_prefixes", lambda project: [trusted])
+
+    bin_dir = tmp_path / ".venv2" / "bin"
+    bin_dir.mkdir(parents=True)
+    real = bin_dir / "python3.12"
+    real.write_text("#!/bin/sh\n")
+    real.chmod(0o755)
+    py3 = bin_dir / "python3"
+    py3.symlink_to("python3.12")
+    py = bin_dir / "python"
+    py.symlink_to("python3")
+    assert helper._python_symlink_target_allowed(tmp_path, py) is True
+    assert helper._python_symlink_target_allowed(tmp_path, py3) is True
+    helper.reject_forbidden_symlinks(tmp_path)
+    assert os.readlink(py) == "python3"
+    assert os.readlink(py3) == "python3.12"
+
+    py3.unlink()
+    py3.symlink_to(system)
+    assert helper._python_symlink_target_allowed(tmp_path, py) is True
+    helper.reject_forbidden_symlinks(tmp_path)
+    assert os.readlink(py) == "python3"
+    assert os.readlink(py3) == os.fspath(system)
+
+
+def test_relative_python_symlink_resolving_to_tmp_is_rejected(tmp_path, monkeypatch):
+    helper = module("deployment_security")
+    trusted = tmp_path / "trusted-prefix"
+    trusted.mkdir()
+    monkeypatch.setattr(helper, "_trusted_python_prefixes", lambda project: [trusted])
+    outside = tmp_path / "tmp"
+    outside.mkdir()
+    payload = outside / "python3"
+    payload.write_text("#!/bin/sh\n")
+    payload.chmod(0o755)
+    before = payload.stat().st_size
+    bin_dir = tmp_path / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    hop = bin_dir / "python3"
+    hop.symlink_to(payload)
+    link = bin_dir / "python"
+    link.symlink_to("python3")
+    assert helper._interpreter_symlink_target_allowed(tmp_path, "python3") is True
+    assert helper._python_symlink_target_allowed(tmp_path, link) is False
+    with pytest.raises(ValueError, match="符号链接"):
+        helper.reject_forbidden_symlinks(tmp_path)
+    assert payload.is_file()
+    assert payload.stat().st_size == before
+    assert not link.is_symlink() or helper._python_symlink_target_allowed(tmp_path, link) is False
+
+
+def test_relative_python_symlink_rejects_non_interpreter_basename(tmp_path):
+    helper = module("deployment_security")
+    bin_dir = tmp_path / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    shim = bin_dir / "shim"
+    shim.write_text("#!/bin/sh\n")
+    shim.chmod(0o755)
+    link = bin_dir / "python"
+    link.symlink_to("shim")
+    assert helper._python_symlink_target_allowed(tmp_path, link) is False
+    with pytest.raises(ValueError, match="符号链接"):
+        helper.reject_forbidden_symlinks(tmp_path)
+    assert not link.exists()
+    assert shim.is_file()
+
+
+def test_relative_python_symlink_outside_bin_layout_is_rejected(tmp_path):
+    helper = module("deployment_security")
+    lib_exec = tmp_path / ".venv" / "lib" / "python3"
+    lib_exec.parent.mkdir(parents=True)
+    lib_exec.write_text("#!/bin/sh\n")
+    lib_exec.chmod(0o755)
+    bin_dir = tmp_path / ".venv" / "bin"
+    bin_dir.mkdir()
+    hop = bin_dir / "python3"
+    hop.symlink_to(Path("..") / "lib" / "python3")
+    link = bin_dir / "python"
+    link.symlink_to("python3")
+    assert helper._python_symlink_target_allowed(tmp_path, link) is False
+    assert helper._python_symlink_target_allowed(tmp_path, hop) is False

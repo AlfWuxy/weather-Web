@@ -127,6 +127,38 @@ def _interpreter_symlink_target_allowed(root, raw):
     return ".." not in Path(raw).parts
 
 
+def _relative_interpreter_basename_ok(raw):
+    """相对目标的最后一级只能是 python、python3 或 pythonX.Y。"""
+    if os.path.isabs(raw) or ".." in Path(raw).parts:
+        return False
+    return _PYTHON_LINK_NAME.fullmatch(Path(raw).name) is not None
+
+
+def _standard_venv_interpreter(root, link, resolved):
+    """最终文件必须是同一虚拟环境 bin 下的标准解释器，不能落在其他目录。"""
+    try:
+        link_rel = Path(link).relative_to(root)
+    except ValueError:
+        return False
+    if not link_rel.parts or not _is_venv_dirname(link_rel.parts[0]):
+        return False
+    venv_root = (Path(root) / link_rel.parts[0]).resolve(strict=False)
+    try:
+        inside = Path(resolved).resolve(strict=True).relative_to(venv_root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    if len(inside.parts) != 2 or inside.parts[0] != "bin":
+        return False
+    return _PYTHON_LINK_NAME.fullmatch(inside.parts[1]) is not None
+
+
+def _resolved_python_location_allowed(root, link, raw, resolved):
+    """解析后的绝对路径必须落在受信前缀，或同一 .venv 的标准解释器布局。"""
+    if _interpreter_symlink_target_allowed(root, os.fspath(resolved)):
+        return True
+    return _relative_interpreter_basename_ok(raw) and _standard_venv_interpreter(root, link, resolved)
+
+
 def _python_symlink_target_allowed(root, path):
     try:
         raw = os.readlink(path)
@@ -147,11 +179,8 @@ def _python_symlink_target_allowed(root, path):
         return False
     if not resolved.exists() or _under_writable_project_dir(root, resolved):
         return False
-    # 解析后的绝对路径必须仍在受信前缀内；不含 .. 的相对链接沿用原规则。
-    if not (
-        _interpreter_symlink_target_allowed(root, os.fspath(resolved))
-        or (not os.path.isabs(raw) and ".." not in Path(raw).parts)
-    ):
+    # 相对链接也要在解析后落在受信前缀；例外仅限同一 .venv/bin 下的 python、python3、pythonX.Y。
+    if not _resolved_python_location_allowed(root, path, raw, resolved):
         return False
     try:
         if Path(path).is_dir():
@@ -180,7 +209,7 @@ def _allowed_venv_symlink(root, path):
                 raw = os.readlink(path)
             except OSError:
                 return False
-            # 绝对目标只允许 /usr、/Library 或系统 Python 前缀；相对目标不得逃出目录。
+            # 绝对目标只允许受信前缀；相对目标解析后也必须落在受信前缀或同一 .venv 的 bin/python*。
             return _interpreter_symlink_target_allowed(root, raw) and _python_symlink_target_allowed(root, path)
     if relative.parts == (venv_name, "lib64"):
         try:
