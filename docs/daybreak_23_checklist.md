@@ -1,8 +1,8 @@
 # Daybreak 23 Checklist
 
 - Worktree: `/Users/imac/Desktop/老家/天气预警网站（main）/.worktrees/security-daybreak-23`
-- Branch: `codex/fix/security-daybreak-23` (HEAD `c13fb76`, dirty)
-- Read: 2026-11-12, Round 9 document agent. Status follows completed agents A01–A05. A06 was still editing `#5` and had not saved `services/community_risk_service.py` (mtime 02:02:03, before that agent started). This pass changed only this checklist and the orchestration log.
+- Branch: `codex/fix/security-daybreak-23` (HEAD `a223ca5`; this checklist edit is not in that commit)
+- Read: 2026-11-12, Round 10 document agent (A08). `#5` follows A01's save at 02:51:16. A04's Partial was a read of the 02:38 file, before that save. A06 had not returned a verdict. This pass changed only this checklist and the orchestration log.
 
 Status meanings: **Fixed** = the control is present in the current tree. **Partial** = the control is present and a remaining gap was visible in code or a failing test. **PendingVerify** = a known residual has a hotfix in flight, and this snapshot does not yet show that fix saved. **NeedsVerify** = the control could not be confirmed. **Open** = the control is absent.
 
@@ -12,7 +12,7 @@ Status meanings: **Fixed** = the control is present in the current tree. **Parti
 | 2 | Fixed | bounded linear input sanitize | `utils/validators.py` caps at 4096, strips script/style with a linear scan, then bleach. |
 | 3 | Fixed | login hard-lock is username + IP | `services/public_service.py` `handle_login` checks `ip_key` / DB lock state before `check_password`. Username key remains telemetry. |
 | 4 | Fixed | usage quota, retention, serial token insert | `core/usage.py` still prunes inside a savepoint or a short transaction and does not commit the caller. `create_api_token` now counts and inserts in one write transaction: an idle session uses `BEGIN IMMEDIATE` (PostgreSQL keeps the advisory lock); an open caller transaction recounts inside `begin_nested()` and raises `UsageQuotaError` without committing. A failed SQLite write lock does not insert. `tests/test_usage_quota_transaction.py`: 12 passed, including two threads with a cap of 1. |
-| 5 | PendingVerify | k-anonymity for medical-derived community stats | Suppressed rows already null reconstructable `hazard_formula` fields, `theme_scores`, `svi_percentile`, and exact rates in advice (A01, 27 passed). Residual still in the saved file: `risk_contributions.after_penalty`, `weather`, and `burden`, with `risk_weights`, solve `svi_percentile` to 0.1 when `uncertainty_penalty` is 1 (`_suppress_reconstructable_risk_fields` only nulls `svi` and `before_penalty`). A06 had not saved this file. |
+| 5 | Fixed | k-anonymity for medical-derived community stats | Suppressed rows null the risk-index equation inputs: `risk_index`, `risk_score`, `weather_hazard_score`, `burden_percentile`, `uncertainty_penalty`, `risk_weights`, `relative_index`, and `expected_excess_visits` (`_SUPPRESSED_DECOMPOSITION_FIELDS`, saved 02:51:16). `risk_contributions` is cleared. Public order is by community name. Authorized rows at or above the threshold keep the exact split. A01 (`8cfc60c0-ecf3-4e0e-9e97-c8dc19272b82`): related pytest 36 passed, including `test_suppressed_risk_index_equation_cannot_recover_svi`. |
 | 6 | Fixed | spreadsheet formula neutralization | `utils/csv_export.py` `spreadsheet_cell` / `spreadsheet_frame`; `blueprints/analysis.py` export uses `spreadsheet_frame`. |
 | 7 | Fixed | hash-locked install as the app user | `scripts/deploy.sh` runs `pip install --require-hashes --only-binary=:all:` via `runuser -u '$APP_USER'`. `requirements.txt` is a hash lock (includes `gunicorn==27.0.0`). |
 | 8 | Fixed | pair action links are short-lived and revocable | TTL default 7 days. DB `short_code` is null; link builder is token-only. `GET /e/<token>` exchanges into `pair_action_grant` and returns 303. Revoke route exists and does not auto-reissue. |
@@ -32,13 +32,13 @@ Status meanings: **Fixed** = the control is present in the current tree. **Parti
 | 22 | Fixed | every public short-code entry shares the failure lock | `_short_code_is_locked` / `_authorize_action_pair` cover action, confirm, help, debrief, and elder token entry. |
 | 23 | Fixed | audit rows survive a later read-only rollback | `persist_audit_entry` writes with `db.engine.begin()` after the request session releases a clean read. |
 
-**Fixed 22. PendingVerify 1 (`#5`). Partial 0. NeedsVerify 0. Open 0.**
+**Fixed 23. PendingVerify 0. Partial 0. NeedsVerify 0. Open 0.**
 
-`#16`, `#17`, and `#18` moved to Fixed. `#4` stays Fixed; the token count and insert now share one write transaction. `#5` is PendingVerify: formula, theme scores, and advice are already cleared, and `after_penalty` can still rebuild `svi_percentile`. A06 had not saved that change.
+`#5` moved from PendingVerify to Fixed. A01 cleared the `risk_index` equation channel on suppressed rows. `#1`–`#4` and `#6`–`#23` stay Fixed. Full suite after that save: pytest **835 passed, 0 failed, 4 skipped, 11 deselected** (`-m 'not manual'`, 62.68s). Node CI list **51 passed, 0 failed** (five files, 217.4 ms, local Node v24.11.1; CI is Node 20). Do not add this pytest total to Round 9's 821.
 
-## Round 10 focus
+## Round 10 record
 
-1. Re-verify `#5` after A06 (`1134d7df-a99d-4535-ae68-e9adf197fc73`) saves. A suppressed ranking must not expose a solvable `risk_contributions` set (`after_penalty`, `weather`, `burden`, `svi`, `before_penalty`, and the weights). Authorized rows at or above the threshold keep the exact split. Mark `#5` Fixed only after that reconstruction is gone.
-2. Run a second full `python -m pytest` from this worktree on the interpreter that produced 821 passed. That run finished before A06's edit. Do not add 821 to the next total. Keep `tests/test_qweather_auth.py` in the run.
-3. After that second run is green and `#5` is Fixed, start the commit and the PR. This document pass does not commit. A09 was drafting `daybreak_pr_commit_draft.md` in the agent store. Snapshot: branch `codex/fix/security-daybreak-23`, HEAD `c13fb76`, 82 modified files (+7249/−841), 8 untracked (`migrations/versions/0013_daybreak_security_hardening.py`, `static/amap-sandbox.html`, `utils/log_safety.py`, this checklist, `tests/test_public_csrf_cache.py`, `tests/test_usage_quota_transaction.py`, `tests/test_miniprogram_bind_token_mask.js`, `tests/test_amap_sandbox_isolation.js`).
-4. Suite record for this round: pytest **821 passed, 0 failed, 4 skipped, 11 deselected** (`-m 'not manual'`, 61.65s). Node CI list **51 passed, 0 failed** (five files, local Node v24.11.1; CI is Node 20).
+1. `#5` is Fixed. On a suppressed row, `(risk_index/uncertainty_penalty - w_weather*weather_hazard_score - w_burden*burden_percentile) / w_svi` has no numeric inputs. `services/community_risk_service.py` mtime 02:51:16; the regression test mtime 02:51:20.
+2. Suite record for this round: pytest **835 passed, 0 failed, 4 skipped, 11 deselected**. Log: `/tmp/r10_full_pytest.txt`. Interpreter: `.worktrees/feature-web-mp-help-interop-20260905/.venv-mac` (`cryptography 50.0.1`). Node: **51 passed, 0 failed**. The 821 run predates this save.
+3. A05 wrote the staging list and did not commit. A07 then created local commit `a223ca575db005c7934882e7e58bd95b7839f66b` (`fix(security): close Daybreak 23 security findings`, 91 files, +9949/−861). No upstream is configured, and that commit was not pushed. The committed checklist is still the Round 9 text (`#5` PendingVerify). This edit is the follow-up status and is not in `a223ca5`.
+4. A04's Fixed 22 / Partial 1 table is the pre-save read. A06 (`b55ac729-824d-4a1c-a69d-089aa969a79a`) had not returned when this was written.
