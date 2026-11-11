@@ -552,6 +552,9 @@ def _assert_demographics_hidden(row):
     assert row["hotspot_z"] is None
     assert row["hotspot_p"] is None
     assert row["hotspot_category"] is None
+    assert row["risk_level"] is None
+    assert row["likelihood_bucket"] is None
+    assert row["matrix_score"] is None
     assert _recover_svi_from_decomposition(row) is None
     assert _vi_from_published_excess(row["expected_excess_visits"], 1.5, 5.0) is None
 
@@ -597,6 +600,7 @@ def _assert_precise_demographics(row, service, name):
     assert estimates
     assert min(abs(estimate - row["svi_percentile"]) for estimate in estimates) <= 0.1
     assert isinstance(row["heatrisk_level"], int) and not isinstance(row["heatrisk_level"], bool)
+    assert row["risk_level"] in {"高风险", "中风险", "低风险"}
     assert row["heatrisk_label"]
     assert row["hotspot_z"] is None or _is_real_number(row["hotspot_z"])
     assert row["uncertainty_index"] is None or _is_real_number(row["uncertainty_index"])
@@ -654,6 +658,7 @@ def _assert_vulnerability_outputs_follow_suppression(result):
             assert features[name].get("heatrisk_level") is None
             assert features[name].get("uncertainty_index") is None
             assert features[name].get("hotspot_category") is None
+            assert features[name].get("risk_level") is None
             assert _recover_svi_from_decomposition(features[name]) is None
             if name in priority_items:
                 assert priority_items[name].get("risk_index") is None
@@ -680,6 +685,7 @@ def _assert_vulnerability_outputs_follow_suppression(result):
             assert hotspot_layers[name] == row["hotspot_category"]
             assert features[name].get("heatrisk_level") == row["heatrisk_level"]
             assert features[name].get("uncertainty_index") == row["uncertainty_index"]
+            assert features[name].get("risk_level") == row["risk_level"]
             feature_estimates = _svi_attack_estimates(features[name])
             assert feature_estimates
             assert min(
@@ -1323,4 +1329,93 @@ def test_suppressed_rows_redact_derived_heatrisk_fields(monkeypatch):
         assert rows[name]["hotspot_z"] is None
         assert rows[name]["uncertainty_index"] is None
         assert rows[name]["heatrisk_level"] is None
+    _assert_vulnerability_outputs_follow_suppression(authorized)
+
+
+def test_suppressed_rows_clear_public_risk_level_and_matrix(monkeypatch):
+    """抑制行不公布 likelihood_bucket、matrix_score 和公开 risk_level。
+
+    有历史分量时这三项是实值。未抑制时保留；授权且样本达到 k 的社区仍保留原值。
+    缺省档位 low / 分值 1 也不能填回抑制行。
+    """
+    from flask import Flask
+    import services.community_risk_service as risk_module
+
+    _pin_ranking_threshold(monkeypatch)
+    monkeypatch.setattr(
+        CommunityRiskService,
+        "_collect_medical_counts",
+        _historical_case_counts,
+    )
+    service = _service_with_demographic_profiles()
+    original_hidden = risk_module._ranking_demographics_hidden
+    original_publication = risk_module._case_count_publication
+    monkeypatch.setattr(risk_module, "_ranking_demographics_hidden", lambda name, sample: False)
+    monkeypatch.setattr(
+        risk_module,
+        "_case_count_publication",
+        lambda name, sample: {"hide": False, "suppressed": False, "redacted": False},
+    )
+    truth = service.generate_community_risk_map({"temperature": 30})
+    truth_rows = _ranking_rows(truth)
+    truth_features = {
+        feature["properties"]["name"]: feature["properties"]
+        for feature in truth["map_data"]["features"]
+    }
+    for row in truth_rows.values():
+        assert row["likelihood_bucket"] in {"low", "medium", "high", "very_high"}
+        assert isinstance(row["matrix_score"], int) and not isinstance(row["matrix_score"], bool)
+        assert row["matrix_score"] >= 1
+        assert row["risk_level"] in {"高风险", "中风险", "低风险"}
+        assert truth_features[row["community"]]["risk_level"] == row["risk_level"]
+
+    monkeypatch.setattr(risk_module, "_ranking_demographics_hidden", original_hidden)
+    monkeypatch.setattr(risk_module, "_case_count_publication", original_publication)
+
+    public_app = Flask("public-risk-level-suppressed")
+    with public_app.test_request_context():
+        public = service.generate_community_risk_map({"temperature": 30})
+
+    public_features = {
+        feature["properties"]["name"]: feature["properties"]
+        for feature in public["map_data"]["features"]
+    }
+    for name, row in _ranking_rows(public).items():
+        _assert_demographics_hidden(row)
+        assert row["likelihood_bucket"] is None
+        assert row["matrix_score"] is None
+        assert row["risk_level"] is None
+        assert row["likelihood_bucket"] != truth_rows[name]["likelihood_bucket"]
+        assert row["matrix_score"] != truth_rows[name]["matrix_score"]
+        assert row["risk_level"] != truth_rows[name]["risk_level"]
+        assert public_features[name]["risk_level"] is None
+        assert "likelihood_bucket" not in public_features[name]
+        assert "matrix_score" not in public_features[name]
+
+    monkeypatch.setattr(
+        risk_module,
+        "_can_view_community_health_stats",
+        lambda name: name == "大村",
+    )
+    authorized_app = Flask("public-risk-level-authorized")
+    with authorized_app.test_request_context():
+        authorized = service.generate_community_risk_map({"temperature": 30})
+
+    rows = _ranking_rows(authorized)
+    kept = rows["大村"]
+    _assert_precise_demographics(kept, service, "大村")
+    assert kept["likelihood_bucket"] == truth_rows["大村"]["likelihood_bucket"]
+    assert kept["matrix_score"] == truth_rows["大村"]["matrix_score"]
+    assert kept["risk_level"] == truth_rows["大村"]["risk_level"]
+    authorized_features = {
+        feature["properties"]["name"]: feature["properties"]
+        for feature in authorized["map_data"]["features"]
+    }
+    assert authorized_features["大村"]["risk_level"] == truth_rows["大村"]["risk_level"]
+    for name in ("小村", "外村", "缺人口"):
+        _assert_demographics_hidden(rows[name])
+        assert rows[name]["likelihood_bucket"] is None
+        assert rows[name]["matrix_score"] is None
+        assert rows[name]["risk_level"] is None
+        assert authorized_features[name]["risk_level"] is None
     _assert_vulnerability_outputs_follow_suppression(authorized)

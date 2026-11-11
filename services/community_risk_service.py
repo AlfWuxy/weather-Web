@@ -104,6 +104,14 @@ _SUPPRESSED_DERIVED_HEAT_FIELDS = (
     'hotspot_category',
 )
 
+# likelihood_bucket 与 matrix_score 是 Impact×Likelihood 的公开分档；
+# risk_level 是归一化危险度的公开档位。抑制行留下它们仍等于公布风险等级。
+_SUPPRESSED_PUBLIC_RISK_FIELDS = (
+    'likelihood_bucket',
+    'matrix_score',
+    'risk_level',
+)
+
 
 def _community_min_sample_size():
     """最小公布样本。优先读 community_access，未提供时用应用配置。"""
@@ -269,6 +277,15 @@ def _null_suppressed_derived_heat_fields(container):
             container[field] = None
 
 
+def _null_suppressed_public_risk_fields(container):
+    """清掉抑制对象上仍会公开风险档位的字段。"""
+    if not isinstance(container, dict):
+        return
+    for field in _SUPPRESSED_PUBLIC_RISK_FIELDS:
+        if field in container:
+            container[field] = None
+
+
 def _suppress_reconstructable_risk_fields(row):
     """抑制行去掉可回推 VI 的公式分量，以及能解出 SVI 分位的风险分解。
 
@@ -276,7 +293,8 @@ def _suppress_reconstructable_risk_fields(row):
     和 relative_index 留在抑制行上时，配公开 macro RR 与固定 baseline 能还原 VI。
     risk_index、uncertainty_penalty、burden_percentile、risk_weights 再配危险度，
     可还原 svi_percentile。heatrisk_level、uncertainty_index、hotspot_z 是这些量的
-    派生结果，留下档位或连续值仍能还原。排名和综合预警的 top_risk 使用同一批行，所以一并置空。
+    派生结果，留下档位或连续值仍能还原。likelihood_bucket、matrix_score 与公开
+    risk_level 直接给出风险档位，抑制行一并置空。排名和综合预警的 top_risk 使用同一批行。
     """
     formula = row.get('hazard_formula')
     if isinstance(formula, dict):
@@ -302,6 +320,7 @@ def _suppress_reconstructable_risk_fields(row):
         for field in ('vulnerability_index', 'excess_risk_score', 'baseline_rate'):
             components[field] = None
     _null_suppressed_derived_heat_fields(row)
+    _null_suppressed_public_risk_fields(row)
 
 
 def _public_ranking_order_key(row):
@@ -1565,7 +1584,7 @@ class CommunityRiskService:
                     'latitude': row.get('latitude'),
                     'longitude': row.get('longitude'),
                     'risk_score': None if row.get('suppressed') else row.get('normalized_score'),
-                    'risk_level': row['risk_level'],
+                    'risk_level': None if row.get('suppressed') else row['risk_level'],
                     'population': row.get('population'),
                     'elderly_ratio': row.get('elderly_ratio'),
                     'chronic_disease_ratio': row.get('chronic_disease_ratio'),
@@ -1618,8 +1637,10 @@ class CommunityRiskService:
                     'hotspot_z': None if row.get('suppressed') else row.get('hotspot_z'),
                     'hotspot_p': None if row.get('suppressed') else row.get('hotspot_p'),
                     'impact_bucket': row.get('impact_bucket', 'low'),
-                    'likelihood_bucket': row.get('likelihood_bucket', 'low'),
-                    'matrix_score': row.get('matrix_score', 1),
+                    'likelihood_bucket': (
+                        None if row.get('suppressed') else row.get('likelihood_bucket', 'low')
+                    ),
+                    'matrix_score': None if row.get('suppressed') else row.get('matrix_score', 1),
                     'equity_stratum': row.get('equity_stratum', 'Q1')
                 }
                 for row in rankings
@@ -1810,7 +1831,8 @@ class CommunityRiskService:
         """按公开权限和样本阈值裁剪排名行上的人口学/脆弱性字段。
 
         隐藏时置空并标记 suppressed，同时清掉可回推 VI 的公式分量、
-        超额就诊、危险度、相对指数、风险分解、热风险档、不确定度、热点 z 值，
+        超额就诊、危险度、相对指数、风险分解、热风险档、不确定度、热点 z 值、
+        公开风险档位（risk_level、likelihood_bucket、matrix_score），
         以及能反推 SVI 分位的贡献表和分位桶。
         这些行会进入排名和综合预警 top_risk。授权且样本达到 k 时保留精确值；
         若同时有抑制行，相对指数只按仍公开的 RiskScore 重算。
@@ -1855,6 +1877,7 @@ class CommunityRiskService:
                     for field in _HAZARD_FORMULA_RECONSTRUCTABLE_FIELDS:
                         formula[field] = None
                 _null_suppressed_derived_heat_fields(props)
+                _null_suppressed_public_risk_fields(props)
                 continue
             if name in visible_relative:
                 props['relative_index'] = visible_relative[name]
