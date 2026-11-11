@@ -49,11 +49,11 @@ class User(UserMixin, db.Model):
     def get_id(self):
         """会话身份含密码戳：改密后旧 session/remember 自动失效。
 
-        格式：{user_id}:{password_hash 的短摘要}。无需额外 DB 列。
+        格式：{user_id}:{HMAC-SHA256(SECRET_KEY, password_hash)[:16]}。
+        无需额外 DB 列。旧的无密钥 sha256 戳不能通过 user_loader。
         """
-        import hashlib
-        stamp = hashlib.sha256((self.password_hash or '').encode('utf-8')).hexdigest()[:16]
-        return f'{self.id}:{stamp}'
+        from core.auth import password_session_stamp
+        return f'{self.id}:{password_session_stamp(self.password_hash)}'
 
 
 class MedicalRecord(db.Model):

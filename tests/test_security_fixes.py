@@ -404,9 +404,22 @@ def test_structured_logs_redact_action_and_tracking_tokens(app, client, monkeypa
     assert all('action-secret' not in message for message in messages)
 
 
-def test_user_get_id_embeds_password_stamp(db_session):
-    """P7：User.get_id 为 {id}:{password_hash 短摘要}，改密后 stamp 变化。"""
+def _hmac_password_stamp(secret, password_hash):
+    """独立计算约定算法，避免测试只转调生产 helper 而放行回退。"""
     import hashlib
+    import hmac
+    if isinstance(secret, str):
+        key = secret.encode('utf-8')
+    else:
+        key = bytes(secret)
+    message = (password_hash or '').encode('utf-8')
+    return hmac.new(key, message, hashlib.sha256).hexdigest()[:16]
+
+
+def test_user_get_id_embeds_password_stamp(app, db_session):
+    """P7：User.get_id 为 {id}:HMAC(SECRET_KEY, password_hash)[:16]，改密后 stamp 变化。"""
+    import hashlib
+    from core.auth import password_session_stamp
     from core.db_models import User
 
     user = User(username='stamp_user', role='user')
@@ -419,8 +432,11 @@ def test_user_get_id_embeds_password_stamp(db_session):
     assert ':' in gid
     uid_part, stamp = gid.split(':', 1)
     assert uid_part == str(user.id)
-    expected = hashlib.sha256((user.password_hash or '').encode('utf-8')).hexdigest()[:16]
+    expected = _hmac_password_stamp(app.config['SECRET_KEY'], user.password_hash)
     assert stamp == expected
+    assert stamp == password_session_stamp(user.password_hash)
+    legacy = hashlib.sha256((user.password_hash or '').encode('utf-8')).hexdigest()[:16]
+    assert stamp != legacy
 
     user.set_password('NewPass34')
     db_session.commit()
@@ -428,6 +444,9 @@ def test_user_get_id_embeds_password_stamp(db_session):
     assert gid2 != gid
     assert gid2.startswith(f'{user.id}:')
     assert gid2.split(':', 1)[1] != stamp
+    assert gid2.split(':', 1)[1] == _hmac_password_stamp(
+        app.config['SECRET_KEY'], user.password_hash
+    )
 
 
 def test_password_change_invalidates_session(app, client, db_session):
@@ -439,7 +458,6 @@ def test_password_change_invalidates_session(app, client, db_session):
     已加载用户缓存在 g._login_user；生产环境每个请求独立 app_context，无此缓存。
     因此在二次请求前显式清掉 g 缓存，才能测到 loader 的 stamp 校验。
     """
-    import hashlib
     from flask import g
     from core.db_models import User
     from core.extensions import login_manager
@@ -494,7 +512,7 @@ def test_password_change_invalidates_session(app, client, db_session):
     assert change.status_code in (302, 303)
 
     db_session.refresh(user)
-    new_stamp = hashlib.sha256((user.password_hash or '').encode('utf-8')).hexdigest()[:16]
+    new_stamp = _hmac_password_stamp(app.config['SECRET_KEY'], user.password_hash)
     old_stamp = str(old_user_id).split(':', 1)[1]
     assert old_stamp != new_stamp, '改密后 stamp 必须变化'
     with client.session_transaction() as session:
@@ -532,6 +550,108 @@ def test_password_change_invalidates_session(app, client, db_session):
     _clear_login_user_cache()
     ok = client.get('/profile', follow_redirects=False)
     assert ok.status_code == 200
+
+
+def test_legacy_sha256_session_and_remember_fail_closed(app, db_session):
+    """部署后旧的无密钥 sha256 会话和 remember cookie 必须失败关闭。"""
+    import hashlib
+    from flask_login.utils import encode_cookie
+
+    from core.db_models import User
+    from core.extensions import login_manager
+
+    user = User(username='legacy_sha_stamp', role='user')
+    user.set_password('OldPass12')
+    db_session.add(user)
+    db_session.commit()
+
+    legacy = hashlib.sha256((user.password_hash or '').encode('utf-8')).hexdigest()[:16]
+    legacy_id = f'{user.id}:{legacy}'
+    assert legacy_id != user.get_id()
+    assert login_manager._user_callback(legacy_id) is None
+    assert login_manager._user_callback(user.get_id()) is not None
+
+    session_client = app.test_client()
+    with session_client.session_transaction() as session:
+        session['_user_id'] = legacy_id
+        session['_fresh'] = True
+    session_response = session_client.get('/profile', follow_redirects=False)
+    assert session_response.status_code in (302, 303)
+    assert '/login' in (session_response.headers.get('Location') or '')
+
+    remember_client = app.test_client()
+    remember_cookie_name = app.config.get('REMEMBER_COOKIE_NAME', 'remember_token')
+    remember_client.set_cookie(remember_cookie_name, encode_cookie(legacy_id))
+    remember_response = remember_client.get('/profile', follow_redirects=False)
+    assert remember_response.status_code in (302, 303)
+    assert '/login' in (remember_response.headers.get('Location') or '')
+
+
+def test_rotated_secret_and_password_change_fail_closed(app, db_session):
+    """SECRET_KEY 轮换与改密都会使已签发的密码戳失效。"""
+    from core.db_models import User
+    from core.extensions import login_manager
+
+    user = User(username='stamp_rotate', role='user')
+    user.set_password('OldPass12')
+    db_session.add(user)
+    db_session.commit()
+    issued = user.get_id()
+
+    app.config['SECRET_KEY'] = 'rotated-secret-key-for-stamp'
+    assert login_manager._user_callback(issued) is None
+    rotated = user.get_id()
+    assert rotated != issued
+    assert rotated.split(':', 1)[1] == _hmac_password_stamp(
+        app.config['SECRET_KEY'], user.password_hash
+    )
+    assert login_manager._user_callback(rotated) is not None
+
+    user.set_password('NewPass34')
+    db_session.commit()
+    assert login_manager._user_callback(rotated) is None
+    assert login_manager._user_callback(issued) is None
+    assert login_manager._user_callback(user.get_id()) is not None
+
+
+def test_password_stamp_requires_app_context():
+    """无应用上下文时不能退回无密钥摘要。"""
+    from core.auth import password_session_stamp
+
+    with pytest.raises(RuntimeError, match='应用上下文'):
+        password_session_stamp('pbkdf2:sha256:placeholder')
+
+
+def test_password_stamp_requires_secret_and_accepts_bytes_key(app, db_session):
+    """空密钥失败关闭；bytes 密钥按同样的 HMAC 规则签发。"""
+    from core.auth import password_session_stamp
+    from core.db_models import User
+    from core.extensions import login_manager
+
+    user = User(username='stamp_nokey', role='user')
+    user.set_password('OldPass12')
+    db_session.add(user)
+    db_session.commit()
+    issued = user.get_id()
+
+    app.config['SECRET_KEY'] = b'bytes-secret-key-for-stamp'
+    bytes_id = user.get_id()
+    assert bytes_id != issued
+    assert bytes_id.split(':', 1)[1] == _hmac_password_stamp(
+        b'bytes-secret-key-for-stamp', user.password_hash
+    )
+    assert login_manager._user_callback(bytes_id) is not None
+    assert login_manager._user_callback(issued) is None
+
+    app.config['SECRET_KEY'] = ''
+    with pytest.raises(RuntimeError):
+        user.get_id()
+    assert login_manager._user_callback(bytes_id) is None
+
+    app.config['SECRET_KEY'] = None
+    with pytest.raises(RuntimeError):
+        password_session_stamp(user.password_hash)
+    assert login_manager._user_callback(issued) is None
 
 
 if __name__ == '__main__':
