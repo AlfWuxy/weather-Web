@@ -1,8 +1,8 @@
 # Daybreak 23 Checklist
 
 - Worktree: `/Users/imac/Desktop/老家/天气预警网站（main）/.worktrees/security-daybreak-23`
-- Branch: `codex/fix/security-daybreak-23` (HEAD `cae9690`; this checklist edit is not in that commit)
-- Read: 2026-11-12, Round 12 document agent (A11). Tree matches `origin` at `cae9690`. `#5` is Fixed: `cae9690` recomputes summaries from unsuppressed rows only, and R12-A09 could not recover the suppressed village. This pass changed only this checklist and the orchestration log.
+- Branch: `codex/fix/security-daybreak-23` (HEAD `59ee5d7`; this checklist edit is not in that commit)
+- Read: 2026-11-12, Round 14 document agent 1. Tree matches `origin` at `59ee5d7`. `#5` is Fixed: `cae9690` recomputes summaries from unsuppressed rows only, and R12-A09 could not recover the suppressed village. `#11` stamp is `HMAC-SHA256(SECRET_KEY, password_hash)[:16]` (`59ee5d7`). This pass changed only this checklist.
 
 Status meanings: **Fixed** = the control is present in the current tree. **Partial** = the control is present and a remaining gap was visible in code or a failing test. **PendingVerify** = a known residual has a hotfix in flight, and this snapshot does not yet show that fix saved. **NeedsVerify** = the control could not be confirmed. **Open** = the control is absent.
 
@@ -18,7 +18,7 @@ Status meanings: **Fixed** = the control is present in the current tree. **Parti
 | 8 | Fixed | pair action links are short-lived and revocable | TTL default 7 days. DB `short_code` is null; link builder is token-only. `GET /e/<token>` exchanges into `pair_action_grant` and returns 303. Revoke route exists and does not auto-reissue. |
 | 9 | Fixed | password policy on bootstrap and reset | `validate_password`: length 8–100, weak list, not all-digit/all-alpha/repeated, at least two classes. `core/app.py` `init_db` and `scripts/reset_admin.py` both call it. |
 | 10 | Fixed | health burden and VI respect community scope | Unauthorized in-request `_build_community_context` uses VI 45, `source=unauthorized_proxy`, and does not read the community row. `_community_recent_burden` returns `cases=None` when the viewer cannot see that community. |
-| 11 | Fixed | password change kills old sessions | `User.get_id()` is `{id}:{sha256(password_hash)[:16]}`. `load_user` rejects non-ASCII ids and non-hex stamps without raising. Change-password calls `login_user` on the real user. The rate limiter treats an unresolved login proxy as an anonymous IP bucket. Filtered pytest: 11 passed, including `test_correct_old_password_accepted` and `test_change_password_rejects_old_session_and_remember_cookie` (old session and remember cookie to `/profile` are 302 to `/login`). |
+| 11 | Fixed | password change kills old sessions | `User.get_id()` is `{id}:{HMAC-SHA256(SECRET_KEY, password_hash)[:16]}`. `load_user` rejects non-ASCII ids and non-hex stamps without raising. Change-password calls `login_user` on the real user. The rate limiter treats an unresolved login proxy as an anonymous IP bucket. Filtered pytest: 11 passed, including `test_correct_old_password_accepted` and `test_change_password_rejects_old_session_and_remember_cookie` (old session and remember cookie to `/profile` are 302 to `/login`). |
 | 12 | Fixed | admin reset does not take the password on argv | `--password` rejected. `allow_abbrev=False`. `--password-stdin=value` errors without echoing the value. Reset still revokes `api_tokens`. |
 | 13 | Fixed | login username cannot inject log lines | Unsafe control characters are rejected before the lock key and the log line. `ControlCharLogFilter` / `sanitize_log_text` cover records that do get logged. |
 | 14 | Fixed | registration IP budget and one-time challenge | POST `/register` has per-hour and per-day IP limits, `reserve_registration`, and an HMAC session challenge. Challenge is on unless `REGISTER_CHALLENGE_REQUIRED` is off, and is skipped under `TESTING` unless tests opt in. |
