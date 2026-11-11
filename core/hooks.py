@@ -166,6 +166,41 @@ def _set_hsts_header(response, app):
     response.headers['Strict-Transport-Security'] = directive
 
 
+_HTML_RESPONSE_MIMETYPES = frozenset({'text/html'})
+_API_RESPONSE_MIMETYPES = frozenset({'application/json', 'application/problem+json'})
+
+
+def _response_mimetype(response):
+    mimetype = getattr(response, 'mimetype', None) or ''
+    return mimetype.split(';', 1)[0].strip().lower()
+
+
+def _is_amap_sandbox_document(path):
+    """独立静态地图页，由父页用 sandbox iframe 加载。"""
+    clean = (path or '').split('?', 1)[0].rstrip('/')
+    return clean.endswith('/amap-sandbox.html')
+
+
+def _apply_html_api_security_headers(response):
+    """给 HTML 和 JSON API 补 MIME 嗅探与点击劫持防护。
+
+    只写这两个头，不读也不改 Content-Security-Policy。
+    地图父页用 SAMEORIGIN，跨站页面嵌不进来，同站嵌套仍可用。
+    /static/amap-sandbox.html 要留在父页的 sandbox iframe 里（无 allow-same-origin）。
+    子页不加 X-Frame-Options：DENY 和 SAMEORIGIN 都可能让这张地图加载失败。
+    JSON API 用 DENY。
+    """
+    mimetype = _response_mimetype(response)
+    is_html = mimetype in _HTML_RESPONSE_MIMETYPES
+    is_api = mimetype in _API_RESPONSE_MIMETYPES
+    if not is_html and not is_api:
+        return
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    if is_html and _is_amap_sandbox_document(request.path or ''):
+        return
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN' if is_html else 'DENY'
+
+
 def _path_is_sensitive(path):
     if path.startswith(('/e/', '/t/')):
         return True
@@ -320,6 +355,10 @@ def register_hooks(app):
         """最后运行的响应头。Flask 按注册逆序执行，本钩子第一个注册。"""
         if _request_qualifies_for_hsts(app):
             _set_hsts_header(response, app)
+
+        # 静态样式和图片仍走下面的提前返回，长缓存不变。
+        # HTML（含 amap-sandbox）和 JSON 在返回前先补安全头。
+        _apply_html_api_security_headers(response)
 
         # 静态资源维持 send_file 原有的长缓存，不被后面的禁缓存规则覆盖。
         if request.endpoint == 'static' or (request.path or '').startswith('/static/'):
