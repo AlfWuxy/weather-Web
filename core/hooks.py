@@ -253,6 +253,28 @@ def _sanitize_log_value(value):
     return sanitize_log_text(text, max_length=max(len(text) * 10, 1))
 
 
+_REQUEST_ID_MAX_LENGTH = 128
+
+
+def _header_safe_request_id(value):
+    """回写响应头前，把 request id 收成安全子集。
+
+    只接受可见 ASCII 字母、数字和短横线，最长 128。
+    缺失、过长，或含换行类及其他字符时生成新 id，不回写原文。
+    """
+    from utils.log_safety import has_unsafe_log_chars
+
+    if (
+        isinstance(value, str)
+        and value
+        and len(value) <= _REQUEST_ID_MAX_LENGTH
+        and not has_unsafe_log_chars(value)
+        and all(char.isascii() and (char.isalnum() or char == '-') for char in value)
+    ):
+        return value
+    return secrets.token_hex(8)
+
+
 def register_hooks(app):
     """Register app hooks, filters, and context processors."""
     @app.errorhandler(413)
@@ -279,7 +301,7 @@ def register_hooks(app):
     @app.before_request
     def init_request_context():
         """初始化请求上下文（结构化日志使用）"""
-        g.request_id = request.headers.get('X-Request-Id') or secrets.token_hex(8)
+        g.request_id = _header_safe_request_id(request.headers.get('X-Request-Id'))
         g.request_start = time.perf_counter()
         g.external_api_timings = []
 
@@ -329,12 +351,12 @@ def register_hooks(app):
             if current_user.is_authenticated:
                 user_id = getattr(current_user, 'id', None)
                 user_role = getattr(current_user, 'role', None)
-            request_id = getattr(g, 'request_id', None)
-            if isinstance(request_id, str):
-                # X-Request-Id 可被客户端夹带 U+2028/U+2029 或控制字符拆行。
-                request_id = _sanitize_log_value(request_id)
+            request_id = _header_safe_request_id(getattr(g, 'request_id', None))
+            g.request_id = request_id
+            # 日志再走一层转义；响应头只用上面的安全子集。
+            logged_request_id = _sanitize_log_value(request_id)
             log_payload = {
-                'request_id': request_id,
+                'request_id': logged_request_id,
                 'user_id': user_id,
                 'user_role': user_role,
                 'method': request.method,
@@ -345,8 +367,7 @@ def register_hooks(app):
                 'external_api': getattr(g, 'external_api_timings', [])
             }
             logger.info(_sanitize_log_value(json.dumps(log_payload, ensure_ascii=False)))
-            if getattr(g, 'request_id', None):
-                response.headers['X-Request-Id'] = g.request_id
+            response.headers['X-Request-Id'] = request_id
         except Exception as exc:
             logger.debug("结构化日志失败: %s", exc)
         return response

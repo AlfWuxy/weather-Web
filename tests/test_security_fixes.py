@@ -452,6 +452,67 @@ def test_structured_logs_redact_action_and_tracking_tokens(app, client, monkeypa
     assert all('action-secret' not in message for message in messages)
 
 
+def _is_safe_request_id(value):
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= 128
+        and all(char.isascii() and (char.isalnum() or char == '-') for char in value)
+    )
+
+
+def test_response_request_id_uses_safe_subset(app, client, monkeypatch):
+    """响应头不得回写带换行类字符的原始 X-Request-Id。"""
+    from core.hooks import _header_safe_request_id
+
+    assert _header_safe_request_id('abc-DEF-123') == 'abc-DEF-123'
+    assert _header_safe_request_id('a' * 128) == 'a' * 128
+
+    rejected = [
+        None,
+        '',
+        'a' * 129,
+        'bad id',
+        'id\r\nX-Injected: 1',
+        'id\n',
+        'id\r',
+        'id\u2028line',
+        'id\u2029para',
+        'id\x00',
+        'id\t',
+        'id\u202e',
+        '中文id',
+        'id_with_underscore',
+    ]
+    for value in rejected:
+        safe = _header_safe_request_id(value)
+        assert safe != value
+        assert _is_safe_request_id(safe)
+
+    app.config['FEATURE_STRUCTURED_LOGS'] = True
+    messages = []
+    monkeypatch.setattr('core.hooks.logger.info', lambda message, *args: messages.append(message))
+
+    kept = client.get('/robots.txt', headers={'X-Request-Id': 'trace-ok-9'})
+    assert kept.headers['X-Request-Id'] == 'trace-ok-9'
+
+    messages.clear()
+    hostile = 'trace\u2028injected'
+    echoed = client.get('/robots.txt', headers={'X-Request-Id': hostile})
+    request_id = echoed.headers['X-Request-Id']
+    assert request_id != hostile
+    assert _is_safe_request_id(request_id)
+    assert hostile not in request_id
+    assert '\u2028' not in request_id
+    assert messages
+    assert all(hostile not in message and '\u2028' not in message for message in messages)
+    assert any(request_id in message for message in messages)
+
+    too_long = 'b' * 129
+    replaced = client.get('/robots.txt', headers={'X-Request-Id': too_long})
+    assert replaced.headers['X-Request-Id'] != too_long
+    assert _is_safe_request_id(replaced.headers['X-Request-Id'])
+
+
 def test_sanitize_input_hostile_prefixes_finish_quickly():
     """超长 script 前缀和前导空白应线性清理，且结果安全（问题 #2）。"""
     import time
