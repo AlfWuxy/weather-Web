@@ -32,7 +32,39 @@
                     <h5 class="mb-0">照护关系</h5>
                 </div>
                 <div class="card-body">
-                    <div class="mb-2"><span class="text-muted">短码：</span><strong>{{ pair.short_code }}</strong></div>
+                    {% if credential_reveal and credential_reveal.short_code %}
+                        <div class="alert alert-warning">
+                            <div class="fw-semibold">8位短码仅展示一次，请立即保存或告知老人</div>
+                            <div class="fs-3 fw-bold mb-0">{{ credential_reveal.short_code }}</div>
+                        </div>
+                    {% endif %}
+                    <div class="mb-2">
+                        <span class="text-muted">短码：</span>
+                        {% if credential_reveal and credential_reveal.pair_id == pair.id %}
+                            <strong>{{ credential_reveal.short_code }}</strong>
+                            <div class="text-warning small">8位短码仅展示一次，请立即保存或告知老人</div>
+                        {% else %}
+                            <span>已启用哈希保护，如需重发请点击轮换凭证</span>
+                        {% endif %}
+                    </div>
+                    <div class="mb-2">
+                        <span class="text-muted">行动链接：</span>
+                        {% if action_link %}
+                            <a href="{{ action_link }}" target="_blank" rel="noopener">打开行动页</a>
+                        {% else %}
+                            <span>已启用哈希保护，如需重发请点击轮换凭证</span>
+                        {% endif %}
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mb-3">
+                        <form method="POST" action="{{ url_for('user.caregiver_pair_credentials_revoke', pair_id=pair.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="btn btn-outline-danger btn-sm" type="submit">撤销凭证</button>
+                        </form>
+                        <form method="POST" action="{{ url_for('user.caregiver_pair_credentials_rotate', pair_id=pair.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="btn btn-outline-primary btn-sm" type="submit">轮换凭证</button>
+                        </form>
+                    </div>
                     <div class="mb-2"><span class="text-muted">社区：</span>{{ pair.community_code }}</div>
                     <div class="mb-2"><span class="text-muted">状态：</span>{{ pair.status }}</div>
                     <div class="mb-2"><span class="text-muted">创建时间：</span>{{ pair.created_at.strftime('%Y-%m-%d %H:%M') if pair.created_at else '-' }}</div>

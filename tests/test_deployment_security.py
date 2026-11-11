@@ -85,6 +85,19 @@ def test_public_url_rejects_plaintext_and_alternate_authorities(url):
         module("deployment_security").public_hostname(url)
 
 
+def _nginx_location_blocks(text, directive):
+    blocks = []
+    needle = f"location {directive} {{"
+    cursor = 0
+    while True:
+        start = text.find(needle, cursor)
+        if start < 0:
+            return blocks
+        end = text.find("\n    }", start)
+        blocks.append(text[start:end])
+        cursor = end + 1
+
+
 def test_https_proxy_template_fixes_origin_and_redirects_http():
     helper = module("deployment_security")
     text = helper.nginx_config("https://site.example", "/etc/certs/fullchain.pem", "/etc/certs/privkey.pem")
@@ -92,6 +105,30 @@ def test_https_proxy_template_fixes_origin_and_redirects_http():
     assert "return 308 https://site.example$request_uri;" in text
     assert "ssl_certificate /etc/certs/fullchain.pem;" in text
     assert "ssl_certificate_key /etc/certs/privkey.pem;" in text
+    assert 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' in text
+    elder = _nginx_location_blocks(text, "/e/")
+    plain = _nginx_location_blocks(text, "/")
+    assert len(elder) == 2
+    assert len(plain) == 2
+    assert "return 308 https://site.example$request_uri;" in elder[0]
+    assert "proxy_pass" not in elder[0]
+    https_elder = elder[1]
+    assert "access_log off;" in https_elder
+    assert "proxy_pass http://127.0.0.1:5000;" in https_elder
+    assert "proxy_set_header X-Forwarded-Proto https;" in https_elder
+    assert "proxy_set_header X-Forwarded-For $remote_addr;" in https_elder
+    assert 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' in https_elder
+    assert "$request_uri" not in https_elder
+    assert "$args" not in https_elder
+    for block in elder:
+        assert "access_log off;" in block
+        assert "access_log " not in block.replace("access_log off;", "")
+        assert "$http_referer" not in block
+        assert "$uri" not in block
+    for block in plain:
+        assert "access_log off;" not in block
+    assert "proxy_pass http://127.0.0.1:5000;" in plain[1]
+    assert 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' in plain[1]
 
 
 @pytest.mark.parametrize("permissions", [0o666, 0o622])
@@ -400,3 +437,96 @@ def test_public_check_does_not_accept_healthy_tls_with_exposed_origin(monkeypatc
     monkeypatch.setattr(Connection, "connect_ex", lambda *args: errno.ENETUNREACH)
     with pytest.raises(ValueError, match="未得到可判断结果"):
         helper.verify_public("https://site.example", "origin.example")
+
+
+@pytest.mark.parametrize("venv_name", [".venv_evil", ".venv", ".venv2"])
+def test_python_symlink_to_passwd_is_rejected(tmp_path, venv_name):
+    helper = module("deployment_security")
+    link = tmp_path / venv_name / "bin" / "python"
+    link.parent.mkdir(parents=True)
+    link.symlink_to("/etc/passwd")
+    passwd = Path("/etc/passwd")
+    before = passwd.stat().st_size
+    with pytest.raises(ValueError, match="符号链接"):
+        helper.reject_forbidden_symlinks(tmp_path)
+    assert not link.exists()
+    assert passwd.is_file()
+    assert passwd.stat().st_size == before
+
+
+def test_venv2_python_symlink_allows_relative_and_system_interpreter(tmp_path):
+    helper = module("deployment_security")
+    bin_dir = tmp_path / ".venv2" / "bin"
+    bin_dir.mkdir(parents=True)
+    interpreter = bin_dir / "python3"
+    interpreter.write_text("#!/bin/sh\n")
+    interpreter.chmod(0o755)
+    relative = bin_dir / "python"
+    relative.symlink_to("python3")
+    system = bin_dir / "python3.14"
+    system.symlink_to(sys.executable)
+    assert helper._python_symlink_target_allowed(tmp_path, relative) is True
+    assert helper._python_symlink_target_allowed(tmp_path, system) is True
+    helper.reject_forbidden_symlinks(tmp_path)
+    assert os.readlink(relative) == "python3"
+    assert os.readlink(system) == sys.executable
+    lib64 = tmp_path / ".venv2" / "lib64"
+    lib64.symlink_to("lib")
+    helper.reject_forbidden_symlinks(tmp_path)
+    assert os.readlink(lib64) == "lib"
+
+
+@pytest.mark.parametrize(
+    ("link_name", "target"),
+    [
+        ("python", "python3"),
+        ("python3", "/usr/bin/python-missing-daybreak-23"),
+    ],
+)
+def test_dangling_python_symlink_is_rejected(tmp_path, link_name, target):
+    helper = module("deployment_security")
+    link = tmp_path / ".venv" / "bin" / link_name
+    link.parent.mkdir(parents=True)
+    link.symlink_to(target)
+    assert helper._interpreter_symlink_target_allowed(tmp_path, target) is True
+    assert helper._python_symlink_target_allowed(tmp_path, link) is False
+    with pytest.raises(ValueError, match="符号链接"):
+        helper.reject_forbidden_symlinks(tmp_path)
+    assert not link.is_symlink()
+
+
+def test_relative_python_symlink_to_dangling_hop_is_rejected(tmp_path):
+    helper = module("deployment_security")
+    bin_dir = tmp_path / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    hop = bin_dir / "python3"
+    hop.symlink_to("/usr/bin/python-missing-daybreak-23")
+    link = bin_dir / "python"
+    link.symlink_to("python3")
+    assert helper._interpreter_symlink_target_allowed(tmp_path, "python3") is True
+    assert helper._python_symlink_target_allowed(tmp_path, link) is False
+
+
+def test_absolute_python_symlink_must_remain_trusted_after_resolution(tmp_path, monkeypatch):
+    helper = module("deployment_security")
+    trusted = tmp_path / "trusted-prefix"
+    bin_dir = trusted / "bin"
+    bin_dir.mkdir(parents=True)
+    real = bin_dir / "python3"
+    real.write_text("#!/bin/sh\n")
+    real.chmod(0o755)
+    outside = tmp_path / "outside-python"
+    outside.write_text("#!/bin/sh\n")
+    outside.chmod(0o755)
+    hop = bin_dir / "python-hop"
+    hop.symlink_to(outside)
+    monkeypatch.setattr(helper, "_trusted_python_prefixes", lambda project: [trusted])
+
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    kept = venv_bin / "python3"
+    kept.symlink_to(real)
+    escaped = venv_bin / "python"
+    escaped.symlink_to(hop)
+    assert helper._python_symlink_target_allowed(tmp_path, kept) is True
+    assert helper._python_symlink_target_allowed(tmp_path, escaped) is False

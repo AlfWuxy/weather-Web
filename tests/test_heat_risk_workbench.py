@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from services.heat_risk_workbench_service import (
+    build_daily_payload,
     build_workbench_data,
     classify_daily_hazard,
     combine_daily_level,
@@ -17,6 +18,7 @@ from services.heat_risk_workbench_service import (
     rank_villages,
     wgs84_to_gcj02,
 )
+from services import heat_risk_workbench_service as heat_service
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKBENCH_PATH = PROJECT_ROOT / "static/data/gis/duchang_heat_risk_workbench.json"
@@ -197,6 +199,98 @@ def test_rank_villages_orders_by_daily_then_static():
     assert [v["name"] for v in ranked] == ["丙", "乙", "甲"]
     assert [v["daily_level"] for v in ranked] == [3, 3, 1]
     assert ranked[0]["elderly_estimate"] == 80
+
+
+def _rank_fixture_village(name, static_level, static_score, population, elderly_ratio):
+    return {
+        "id": name,
+        "name": name,
+        "static_level": static_level,
+        "static_score": static_score,
+        "population": population,
+        "elderly_ratio": elderly_ratio,
+    }
+
+
+def _small_sample_rank_fixtures():
+    """两套固定小样本：真实高危村对调后，公开名次应保持不变。"""
+    profiles = ((4, 96, 3, 0.8), (2, 55, 4, 0.4), (0, 8, 2, 0.2))
+    by_risk = ["高危村", "中危村", "低危村"]
+    swapped = ["低危村", "中危村", "高危村"]
+    return (
+        [_rank_fixture_village(name, *profile) for name, profile in zip(by_risk, profiles)],
+        [_rank_fixture_village(name, *profile) for name, profile in zip(swapped, profiles)],
+    )
+
+
+def _pin_rank_sample_size(monkeypatch):
+    monkeypatch.setattr(heat_service, "_heat_min_sample_size", lambda: 10)
+
+
+def _rank_request():
+    """不启动完整站点，只提供真实请求上下文。"""
+    from flask import Flask
+
+    app = Flask("heat-rank-test")
+    app.secret_key = "heat-rank-test"
+    return app.test_request_context()
+
+
+def test_public_k_anon_rank_ignores_true_village_risk_order(monkeypatch):
+    _pin_rank_sample_size(monkeypatch)
+    higher_first, lower_first = _small_sample_rank_fixtures()
+    stable_order = ["中危村", "低危村", "高危村"]
+    forecast = [{"forecast_date": "2026-07-01", "temperature_max": 38, "temperature_min": 24}]
+
+    with _rank_request():
+        ranked_higher = rank_villages(higher_first, {"level": 3}, limit=0)
+        ranked_lower = rank_villages(lower_first, {"level": 3}, limit=0)
+        payload = build_daily_payload(forecast, 0, higher_first, [], "fixture")
+
+    assert [v["name"] for v in ranked_higher] == stable_order
+    assert [v["name"] for v in ranked_lower] == stable_order
+    assert [v["name"] for v in ranked_higher] != ["高危村", "中危村", "低危村"]
+    assert [v["name"] for v in payload["priority"][0]["villages"]] == stable_order
+    assert payload["priority"][0]["village_ids"] == stable_order
+
+
+def test_authorized_rank_keeps_true_village_risk_order(monkeypatch):
+    _pin_rank_sample_size(monkeypatch)
+    monkeypatch.setattr(heat_service, "_heat_can_view_health_stats", lambda name: True)
+    higher_first, lower_first = _small_sample_rank_fixtures()
+    tied = [
+        _rank_fixture_village("低病例村", 3, 60, 40, 0.1),
+        _rank_fixture_village("高病例村", 3, 60, 40, 0.8),
+    ]
+
+    with _rank_request():
+        ranked_higher = rank_villages(higher_first, {"level": 3}, limit=0)
+        ranked_lower = rank_villages(lower_first, {"level": 3}, limit=0)
+        ranked_tied = rank_villages(tied, {"level": 3}, limit=0)
+
+    assert [v["name"] for v in ranked_higher] == ["高危村", "中危村", "低危村"]
+    assert [v["name"] for v in ranked_lower] == ["低危村", "中危村", "高危村"]
+    assert [v["name"] for v in ranked_tied] == ["高病例村", "低病例村"]
+
+
+def test_public_large_sample_rank_keeps_vulnerability_order(monkeypatch):
+    """样本达到 k 时，未授权仍按脆弱性排序，不按病例数把低脆弱村提前。"""
+    _pin_rank_sample_size(monkeypatch)
+    villages = [
+        _rank_fixture_village("高危村", 4, 90, 80, 0.1),
+        _rank_fixture_village("低危村", 0, 10, 80, 0.9),
+    ]
+    tied = [
+        _rank_fixture_village("低病例村", 3, 60, 40, 0.1),
+        _rank_fixture_village("高病例村", 3, 60, 40, 0.8),
+    ]
+
+    with _rank_request():
+        ranked = rank_villages(villages, {"level": 3}, limit=0)
+        ranked_tied = rank_villages(tied, {"level": 3}, limit=0)
+
+    assert [v["name"] for v in ranked] == ["高危村", "低危村"]
+    assert [v["name"] for v in ranked_tied] == ["低病例村", "高病例村"]
 
 
 # ---------------------------------------------------------------------------

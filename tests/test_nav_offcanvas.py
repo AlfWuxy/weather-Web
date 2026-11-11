@@ -13,9 +13,13 @@ def _set_logged_in_user(client, db_session, *, username, role):
     user.set_password('testpass')
     db_session.add(user)
     db_session.commit()
+    from core.extensions import db
+
+    with client.application.app_context():
+        stamped_id = db.session.get(User, user.id).get_id()
     with client.session_transaction() as session:
         session.clear()
-        session['_user_id'] = str(user.id)
+        session['_user_id'] = stamped_id
         session['_fresh'] = True
         session['_csrf_token'] = 'nav-csrf'
     return user

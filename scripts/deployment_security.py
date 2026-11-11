@@ -37,11 +37,185 @@ def known_hosts(path):
         raise ValueError("known_hosts 属主不可信")
 
 
+_PYTHON_LINK_NAME = re.compile(r"^python(\d+(\.\d+)?)?$")
+_WRITABLE_DIR_NAMES = frozenset({"instance", "storage", "logs"})
+
+
+def _is_venv_dirname(part):
+    # 只接受 .venv / .venv2 / .venv3，拒绝 .venv_evil 这种前缀伪装。
+    return part == ".venv" or re.fullmatch(r"\.venv\d*", part) is not None
+
+
+def _inside_venv(root, path):
+    try:
+        relative = Path(path).relative_to(root)
+    except ValueError:
+        return False
+    # 只认项目根的直接子目录，拒绝更深层的 .venv*。
+    if len(relative.parts) < 2 or any(part in {".", ".."} for part in relative.parts):
+        return False
+    part = relative.parts[0]
+    return part == ".venv" or re.fullmatch(r"\.venv\d*", part) is not None
+
+
+def _under_writable_project_dir(root, candidate):
+    """解析后的路径落在项目内 instance、storage 或 logs 时视为可写目录。"""
+    writable = {name.casefold() for name in _WRITABLE_DIR_NAMES}
+    bases = [Path(os.path.abspath(root))]
+    candidates = [Path(os.path.normpath(os.path.abspath(candidate)))]
+    try:
+        bases.append(Path(root).resolve(strict=False))
+        candidates.append(Path(candidate).resolve(strict=False))
+    except (OSError, RuntimeError):
+        return True
+    for base, target in zip(bases, candidates):
+        try:
+            relative = target.relative_to(base)
+        except ValueError:
+            continue
+        if relative.parts and relative.parts[0].casefold() in writable:
+            return True
+    return False
+
+
+def _trusted_python_prefixes(project):
+    """绝对解释器只能落在 /usr、/Library 或当前系统 Python 安装前缀内。"""
+    candidates = [Path("/usr"), Path("/Library")]
+    base = getattr(sys, "base_prefix", "") or ""
+    if base:
+        candidates.append(Path(base))
+    for executable in (sys.executable, os.path.realpath(sys.executable)):
+        path = Path(executable)
+        if not path.is_absolute():
+            continue
+        candidates.append(path.parent.parent if path.parent.name == "bin" else path.parent)
+    try:
+        project_root = Path(project).resolve(strict=False)
+    except (OSError, RuntimeError):
+        project_root = Path(os.path.abspath(project))
+    prefixes = []
+    for candidate in candidates:
+        prefix = Path(os.path.normpath(candidate))
+        if not prefix.is_absolute() or prefix == Path("/"):
+            continue
+        try:
+            prefix.resolve(strict=False).relative_to(project_root)
+        except ValueError:
+            if prefix not in prefixes:
+                prefixes.append(prefix)
+        except (OSError, RuntimeError):
+            continue
+    return prefixes
+
+
+def _interpreter_symlink_target_allowed(root, raw):
+    """bin/python* 的目标必须是受信任绝对路径，或不含 .. 的相对路径。"""
+    if not raw or "\x00" in raw:
+        return False
+    if os.path.isabs(raw):
+        normalized = os.path.normpath(raw)
+        if not os.path.isabs(normalized):
+            return False
+        target = Path(normalized)
+        for prefix in _trusted_python_prefixes(root):
+            try:
+                target.relative_to(prefix)
+            except ValueError:
+                continue
+            return True
+        return False
+    return ".." not in Path(raw).parts
+
+
+def _python_symlink_target_allowed(root, path):
+    try:
+        raw = os.readlink(path)
+    except OSError:
+        return False
+    if not raw or "\x00" in raw:
+        return False
+    target = Path(raw)
+    if not target.is_absolute():
+        target = Path(path).parent / target
+    lexical = Path(os.path.normpath(target))
+    if _under_writable_project_dir(root, lexical):
+        return False
+    try:
+        # 目标不存在、断链或解析失败都拒绝，避免悬空链接被保留。
+        resolved = target.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    if not resolved.exists() or _under_writable_project_dir(root, resolved):
+        return False
+    # 解析后的绝对路径必须仍在受信前缀内；不含 .. 的相对链接沿用原规则。
+    if not (
+        _interpreter_symlink_target_allowed(root, os.fspath(resolved))
+        or (not os.path.isabs(raw) and ".." not in Path(raw).parts)
+    ):
+        return False
+    try:
+        if Path(path).is_dir():
+            return False
+        info = os.stat(path)
+    except OSError:
+        return False
+    # 目标必须存在，且是常规可执行文件；目录符号链接和其他类型一律拒绝。
+    return stat.S_ISREG(info.st_mode) and bool(info.st_mode & 0o111)
+
+
+def _allowed_venv_symlink(root, path):
+    if not _inside_venv(root, path):
+        return False
+    try:
+        relative = Path(path).relative_to(root)
+    except ValueError:
+        return False
+    if not relative.parts or not _is_venv_dirname(relative.parts[0]):
+        return False
+    venv_name = relative.parts[0]
+    if len(relative.parts) == 3:
+        link_name = relative.parts[2]
+        if relative.parts == (venv_name, "bin", link_name) and _PYTHON_LINK_NAME.fullmatch(link_name):
+            try:
+                raw = os.readlink(path)
+            except OSError:
+                return False
+            # 绝对目标只允许 /usr、/Library 或系统 Python 前缀；相对目标不得逃出目录。
+            return _interpreter_symlink_target_allowed(root, raw) and _python_symlink_target_allowed(root, path)
+    if relative.parts == (venv_name, "lib64"):
+        try:
+            return os.readlink(path) == "lib"
+        except OSError:
+            return False
+    return False
+
+
+def reject_forbidden_symlinks(project):
+    root = Path(project)
+    if root.is_symlink():
+        raise ValueError("应用目录或运行账号不安全")
+    if not root.exists():
+        return
+
+    def onerror(error):
+        raise error
+
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=onerror):
+        current = Path(directory)
+        for name in list(dirs) + list(files):
+            path = current / name
+            if not path.is_symlink() or _allowed_venv_symlink(root, path):
+                continue
+            os.unlink(path)
+            raise ValueError(f"发现禁止的符号链接: {path}")
+
+
 def secure_tree(project, user):
     root = Path(project)
     account = pwd.getpwnam(user)
     if account.pw_uid == 0 or root.is_symlink():
         raise ValueError("应用目录或运行账号不安全")
+    reject_forbidden_symlinks(project)
     mutable = {root / name for name in ("instance", "storage", "logs")}
     for directory, dirs, files in os.walk(root, followlinks=False):
         here = Path(directory)
@@ -79,12 +253,27 @@ def secure_tree(project, user):
 
 def nginx_config(url, cert, key):
     host = public_hostname(url)
+    # /e/<token> 的路径和 query 都是行动链接凭据。只在该 location 关闭访问日志，
+    # 避免默认 combined 格式把完整 GET /e/<token> 写入 access_log。
+    proxy = """        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_hide_header Strict-Transport-Security;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;"""
     return f"""# 证书须由运维预置；仅本机回环连接应用。
+# /e/ 行动链接的 token 与 query 不进入 access_log。
 server {{
     listen 80;
     listen [::]:80;
     server_name {host};
-    return 308 https://{host}$request_uri;
+    location /e/ {{
+        access_log off;
+        return 308 https://{host}$request_uri;
+    }}
+    location / {{
+        return 308 https://{host}$request_uri;
+    }}
 }}
 server {{
     listen 443 ssl;
@@ -93,11 +282,12 @@ server {{
     ssl_certificate {cert};
     ssl_certificate_key {key};
     ssl_protocols TLSv1.2 TLSv1.3;
+    location /e/ {{
+        access_log off;
+{proxy}
+    }}
     location / {{
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-For $remote_addr;
+{proxy}
     }}
 }}
 """
@@ -113,6 +303,7 @@ def verify_origin(project, user, url, cert, key):
     expected_uid = run("id", "-u", user).strip()
     if expected_uid == "0":
         raise ValueError("应用账号实际 UID 不得为零")
+    reject_forbidden_symlinks(project)
     expected = nginx_config(url, cert, key)
     conf = Path("/etc/nginx/conf.d/case-weather.conf")
     if conf.read_text() != expected:

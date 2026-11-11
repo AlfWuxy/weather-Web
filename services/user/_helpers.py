@@ -2,6 +2,7 @@
 """User-facing helper utilities."""
 import json
 from datetime import timedelta
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from flask import url_for
 from flask_login import current_user
@@ -130,7 +131,20 @@ def _personalized_care_notes(chronic_diseases):
     return notes
 
 
-def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=None, action_link=None):
+def _without_short_code_query(url):
+    """去掉行动链接上的 short_code 查询参数。"""
+    if not url or 'short_code=' not in str(url):
+        return url
+    parts = urlsplit(str(url))
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key != 'short_code'
+    ]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=None, action_link=None, reveal_short_code=None):
     """Build a one-click message the caregiver can forward to the elder."""
     weather_data = weather_data or {}
     location = (getattr(pair, 'location_query', None) or getattr(pair, 'community_code', None) or '').strip()
@@ -155,8 +169,7 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
         tmax_s = None
         tmin_s = None
 
-    if not action_link:
-        action_link = url_for('public.elder_entry', short_code=pair.short_code, _external=True)
+    action_link = _without_short_code_query(action_link)
 
     lines = []
     if alert_kind == 'cold':
@@ -186,7 +199,14 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
     lines.extend(_personalized_care_notes(chronic_diseases))
 
     lines.append('说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。')
-    lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
+    if action_link and reveal_short_code:
+        lines.append(f'（可选）行动页：{action_link}  短码：{reveal_short_code}')
+        lines.append('8位短码仅展示一次，请立即保存或告知老人')
+    elif action_link:
+        lines.append(f'（可选）行动页：{action_link}')
+    elif reveal_short_code:
+        lines.append(f'短码：{reveal_short_code}')
+        lines.append('8位短码仅展示一次，请立即保存或告知老人')
     return '\n'.join([line for line in lines if line])
 
 

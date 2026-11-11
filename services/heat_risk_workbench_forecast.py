@@ -45,7 +45,7 @@ def validated_forecast(entries, source, start_date=None, days=7, demo=False):
 
 def _fetch_openmeteo(location):
     """只读真实逐日预报，不沿用通用预报链路里的缺温默认值。"""
-    from core.weather import get_weather_fetcher
+    from core.weather import _call_weather_upstream, get_weather_fetcher
 
     fetcher = get_weather_fetcher()
     if fetcher is None:
@@ -55,7 +55,7 @@ def _fetch_openmeteo(location):
     if not coordinates:
         return []
     lon, lat = coordinates
-    response = requests.get(
+    response = _call_weather_upstream(lambda: requests.get(
         "https://api.open-meteo.com/v1/forecast",
         params={
             "latitude": lat,
@@ -66,7 +66,7 @@ def _fetch_openmeteo(location):
             "forecast_days": 7,
         },
         timeout=10,
-    )
+    ))
     response.raise_for_status()
     payload = response.json()
     daily = payload.get("daily") or {}

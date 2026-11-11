@@ -30,7 +30,7 @@ def test_security_upgrade_from_0010_preserves_users(monkeypatch, tmp_path):
         command.stamp(config, '0010_action_token_hardening')
         run_migrations(app)
         with db.engine.connect() as conn:
-            assert MigrationContext.configure(conn).get_current_revision() == '0012_security_merge'
+            assert MigrationContext.configure(conn).get_current_revision() == '0013_daybreak_security_hardening'
             assert conn.exec_driver_sql('SELECT username FROM users').scalar() == 'preserved-owner'
             assert conn.exec_driver_sql('SELECT authorized_community FROM users').scalar() is None
             assert conn.exec_driver_sql('SELECT expires_at FROM api_tokens').scalar() is not None

@@ -8,7 +8,7 @@
         <div class="col-12 d-flex flex-wrap justify-content-between align-items-center">
             <div>
                 <h2><i class="bi bi-wechat"></i> 照护人微信模板</h2>
-                <p class="text-muted mb-0">仅包含短码与行动链接，不含个人身份信息。</p>
+                <p class="text-muted mb-0">行动链接不含短码。短码只在签发或轮换时展示一次，不含个人身份信息。</p>
             </div>
             <a class="btn btn-outline-secondary" href="{{ url_for('user.caregiver_dashboard') }}">
                 <i class="bi bi-arrow-left"></i> 返回工作台
@@ -24,14 +24,31 @@
             {% if not weather_available %}
             <div class="alert alert-warning" role="status">
                 <strong>天气更新中</strong><br>
-                风险等级暂不显示。你仍可复制行动链接和短码，提醒对方完成安全确认或求助。
+                风险等级暂不显示。你仍可复制行动链接，提醒对方完成安全确认或求助。
+            </div>
+            {% endif %}
+            {% if not action_link %}
+            <div class="alert alert-secondary" role="status">
+                已启用哈希保护，如需重发请点击轮换凭证
             </div>
             {% endif %}
             <textarea class="form-control" rows="10" id="wechatMessage" readonly>{{ message }}</textarea>
             <button class="btn btn-primary mt-3" type="button" id="copyMessage">
                 <i class="bi bi-clipboard"></i> {% if weather_available %}复制文本{% else %}复制行动链接说明{% endif %}
             </button>
-            <div class="text-muted small mt-2">建议提醒对方进入链接并输入短码完成确认。</div>
+            {% if pair %}
+            <div class="d-flex flex-wrap gap-2 mt-3">
+                <form method="POST" action="{{ url_for('user.caregiver_pair_credentials_revoke', pair_id=pair.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="btn btn-outline-danger btn-sm" type="submit">撤销凭证</button>
+                </form>
+                <form method="POST" action="{{ url_for('user.caregiver_pair_credentials_rotate', pair_id=pair.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="btn btn-outline-primary btn-sm" type="submit">轮换凭证</button>
+                </form>
+            </div>
+            {% endif %}
+            <div class="text-muted small mt-2">建议提醒对方打开行动链接完成确认。已启用哈希保护，如需重发请点击轮换凭证。</div>
         </div>
     </div>
 </div>

@@ -33,6 +33,12 @@
                     <i class="bi bi-megaphone"></i> 公共传播包
                 </a>
             {% endif %}
+            {% if credential_reveal and credential_reveal.short_code %}
+                <div class="alert alert-warning mt-3 mb-0">
+                    <div class="fw-semibold">8位短码仅展示一次，请立即保存或告知老人</div>
+                    <div class="fs-3 fw-bold mb-0">{{ credential_reveal.short_code }}</div>
+                </div>
+            {% endif %}
         </div>
     </div>
 
@@ -88,11 +94,30 @@
                     <div class="card-body">
                         <div class="mb-2">
                             <div class="text-muted small">短码</div>
-                            <div class="fs-3 fw-bold">{{ created_pair.short_code }}</div>
+                            {% if credential_reveal and created_pair and credential_reveal.pair_id == created_pair.id %}
+                                <div class="fs-3 fw-bold">{{ credential_reveal.short_code }}</div>
+                                <div class="text-warning small">8位短码仅展示一次，请立即保存或告知老人</div>
+                            {% else %}
+                                <div class="text-muted">已启用哈希保护，如需重发请点击轮换凭证</div>
+                            {% endif %}
                         </div>
                         <div class="mb-3">
                             <div class="text-muted small">行动链接（需要时转发）</div>
-                            <input class="form-control" value="{{ created_action_link }}" readonly>
+                            {% if created_action_link %}
+                                <input class="form-control" value="{{ created_action_link }}" readonly>
+                            {% else %}
+                                <div class="text-muted small">已启用哈希保护，如需重发请点击轮换凭证</div>
+                            {% endif %}
+                        </div>
+                        <div class="d-flex flex-wrap gap-2 mb-3">
+                            <form method="POST" action="{{ url_for('user.caregiver_pair_credentials_revoke', pair_id=created_pair.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="btn btn-outline-danger btn-sm" type="submit">撤销凭证</button>
+                            </form>
+                            <form method="POST" action="{{ url_for('user.caregiver_pair_credentials_rotate', pair_id=created_pair.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button class="btn btn-outline-primary btn-sm" type="submit">轮换凭证</button>
+                            </form>
                         </div>
                         <div class="text-muted small">把行动链接发给家人后，可在这里继续查看是否已确认。</div>
                     </div>
@@ -146,7 +171,12 @@
                                         <div class="card-body">
                                             <div class="d-flex justify-content-between align-items-start">
                                                 <div>
-                                                    <div class="text-muted small">短码 {{ item.pair.short_code }}</div>
+                                                    {% if credential_reveal and credential_reveal.pair_id == item.pair.id %}
+                                                        <div class="text-warning small">8位短码仅展示一次，请立即保存或告知老人</div>
+                                                        <div class="fw-bold">{{ credential_reveal.short_code }}</div>
+                                                    {% else %}
+                                                        <div class="text-muted small">已启用哈希保护，如需重发请点击轮换凭证</div>
+                                                    {% endif %}
                                                     <div class="fs-5 fw-bold">{{ item.elder_name or '老人' }}</div>
                                                     <div class="text-muted small">地点 {{ item.location_display or item.pair.community_code }}</div>
                                                     {% if item.weather_available %}
@@ -237,15 +267,27 @@
                                                         <i class="bi bi-arrow-up-right"></i> 升级链按钮
                                                     </button>
                                                 </form>
+                                                <form method="POST" action="{{ url_for('user.caregiver_pair_credentials_revoke', pair_id=item.pair.id) }}">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                    <button class="btn btn-outline-danger btn-sm" type="submit">撤销凭证</button>
+                                                </form>
+                                                <form method="POST" action="{{ url_for('user.caregiver_pair_credentials_rotate', pair_id=item.pair.id) }}">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                    <button class="btn btn-outline-primary btn-sm" type="submit">轮换凭证</button>
+                                                </form>
                                                 {% if pair_detail_endpoint %}
                                                     <a class="btn btn-outline-secondary btn-sm" href="{{ url_for(pair_detail_endpoint, pair_id=item.pair.id) }}">
                                                         <i class="bi bi-eye"></i> 详情
                                                     </a>
                                                 {% endif %}
                                             </div>
-                                            <div class="text-muted small mt-2">
-                                                行动入口：<a href="{{ item.action_link }}" target="_blank">打开短码页</a>
-                                            </div>
+                                            {% if item.action_link %}
+                                                <div class="text-muted small mt-2">
+                                                    行动入口：<a href="{{ item.action_link }}" target="_blank" rel="noopener">打开行动页</a>
+                                                </div>
+                                            {% else %}
+                                                <div class="text-muted small mt-2">已启用哈希保护，如需重发请点击轮换凭证</div>
+                                            {% endif %}
                                         </div>
                                     </div>
                                 </div>

@@ -156,7 +156,7 @@
                         <hr>
                         <form method="POST" action="{{ confirm_action or url_for('public.action_confirm') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="short_code" value="{{ pair.short_code }}">
+                            <input type="hidden" name="short_code" value="">
                             <div class="mb-3">
                                 {% if actions %}
                                     <h6 class="mb-2">3步行动清单</h6>
@@ -185,7 +185,7 @@
                         <hr>
                         <form method="POST" action="{{ help_action or url_for('public.action_help') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="short_code" value="{{ pair.short_code }}">
+                            <input type="hidden" name="short_code" value="">
                             <div class="d-flex flex-wrap gap-2 align-items-center">
                                 <button class="btn btn-danger btn-lg" type="submit">
                                     <i class="bi bi-life-preserver"></i> 我需要帮助
@@ -216,7 +216,7 @@
                     <div class="card-body">
                         <form method="POST" action="{{ debrief_action or url_for('public.action_debrief') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="short_code" value="{{ pair.short_code }}">
+                            <input type="hidden" name="short_code" value="">
                             <div class="row g-3">
                                 <div class="col-md-4">
                                     <label class="form-label">今天行动完成度</label>

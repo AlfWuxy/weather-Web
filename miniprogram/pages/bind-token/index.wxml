@@ -5,14 +5,19 @@
       试点阶段先在网页端生成 Token，在这里输入完成绑定。
     </view>
 
-    <view style="margin-top: 14px;">
+    <view class="token-row" style="margin-top: 14px;">
       <input
+        class="token-input"
         placeholder="粘贴 Web 生成的 Token"
         value="{{tokenInput}}"
+        password="{{!showToken}}"
         bindinput="onInput"
-        style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background: #fff;"
       />
+      <button class="btn-outline token-toggle" bindtap="onToggleToken">{{showToken ? '隐藏' : '显示'}}</button>
     </view>
+
+    <view wx:if="{{bound && tokenTail}}" class="hint bound-hint">已绑定，末尾 4 位 {{tokenTail}}</view>
+    <view wx:elif="{{bound}}" class="hint bound-hint">已绑定，凭证已隐藏</view>
 
     <view style="display:flex; gap: 10px; margin-top: 14px;">
       <button class="btn-primary" style="flex:1;" bindtap="onBind">绑定并进入</button>

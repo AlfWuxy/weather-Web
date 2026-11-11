@@ -225,7 +225,8 @@ def test_short_code_action_resolve_pair(app, db_session):
     from services import public_service
     from core.db_models import PairLink, User
     from core.extensions import db
-    from core.security import hash_pair_token, hash_short_code
+    from core.security import hash_short_code
+    from services.user._common import _create_pair_link_record
 
     with app.app_context():
         app.config['PAIR_TOKEN_PEPPER'] = 'test-pepper'
@@ -235,24 +236,17 @@ def test_short_code_action_resolve_pair(app, db_session):
         db_session.add(caregiver)
         db_session.commit()
 
-        short_code = '12345678'
-        token = 'token-123'
-        link = PairLink(
-            caregiver_id=caregiver.id,
-            short_code=short_code,
-            short_code_hash=hash_short_code(short_code),
-            token_hash=hash_pair_token(token),
-            community_code='test',
-            status='active'
-        )
-        db_session.add(link)
+        link, token = _create_pair_link_record(caregiver.id, 'test', flush=True)
+        short_code = link.issued_short_code
+        assert short_code
         db_session.commit()
 
         with app.test_request_context('/'):
             pair, error = public_service._resolve_pair(short_code, token)
         assert error is None
         assert pair is not None
-        assert pair.short_code == short_code
+        assert pair.short_code is None
+        assert pair.short_code_hash == hash_short_code(short_code)
 
         refreshed = db.session.get(PairLink, link.id)
         assert refreshed.status == 'redeemed'

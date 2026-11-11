@@ -11,13 +11,14 @@ from flask import current_app, g, has_app_context, request
 logger = logging.getLogger(__name__)
 
 
-def _serialize_extra(extra_data: Optional[Dict[str, Any]]) -> str:
-    if not extra_data:
-        return "{}"
+def _log_audit_failure(exc: BaseException) -> None:
+    detail = type(exc).__name__
     try:
-        return json.dumps(extra_data, ensure_ascii=True)
-    except (TypeError, ValueError):
-        return "{}"
+        from utils.log_safety import sanitize_log_text
+        detail = sanitize_log_text(detail)
+    except Exception:
+        pass
+    logger.warning("审计日志写入失败: %s", detail)
 
 
 def log_security_event(
@@ -44,10 +45,7 @@ def log_security_event(
         return
 
     try:
-        from core.db_models import AuditLog
-        from core.extensions import db
-
-        from core.audit import _get_client_ip_context
+        from core.audit import _get_client_ip_context, persist_audit_entry
 
         ip_ctx = _get_client_ip_context()
         extra_payload = extra_data.copy() if isinstance(extra_data, dict) else {}
@@ -56,25 +54,17 @@ def log_security_event(
         if ip_ctx.get("ip_prefix"):
             extra_payload.setdefault("ip_prefix", ip_ctx.get("ip_prefix"))
 
-        entry = AuditLog(
-            actor_id=actor_id,
-            actor_role=actor_role,
-            action=action,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            extra_data=_serialize_extra(extra_payload),
-            # 仅保存哈希IP，避免在审计库中持久化明文个人信息
-            ip_address=ip_ctx.get("ip_hash"),
-            user_agent=request.headers.get("User-Agent"),
-            request_id=getattr(g, "request_id", None),
-        )
-        # 使用 savepoint 隔离，避免干扰调用方的主事务
-        nested = db.session.begin_nested()
-        try:
-            db.session.add(entry)
-            nested.commit()
-        except Exception:
-            nested.rollback()
-            raise
+        # 先收成纯标量。只读路径里的 rollback 会使已加载对象过期。
+        persist_audit_entry({
+            "actor_id": actor_id,
+            "actor_role": actor_role,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "extra_data": extra_payload,
+            "ip_address": ip_ctx.get("ip_hash"),
+            "user_agent": request.headers.get("User-Agent"),
+            "request_id": getattr(g, "request_id", None),
+        })
     except Exception as exc:
-        logger.warning("Failed to persist audit log: %s", exc)
+        _log_audit_failure(exc)

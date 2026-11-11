@@ -5,11 +5,12 @@ import logging
 import os
 import secrets
 
-from flask import abort, current_app, has_app_context, jsonify, request, session
+from flask import abort, current_app, g, has_app_context, has_request_context, jsonify, request, session
 
 logger = logging.getLogger(__name__)
 from flask_login import current_user
 from flask_limiter.util import get_remote_address
+from werkzeug.local import LocalProxy
 
 from core.constants import GUEST_ID_PREFIX
 
@@ -37,16 +38,59 @@ def _client_ip_for_rate_limit():
     return client_ip
 
 
+def _authenticated_rate_limit_user():
+    """已登录主体。未加载、匿名，或 g 里是未展开代理时返回 None。
+
+    ``login_user(current_user)`` 会把 LocalProxy 放进 ``g._login_user``。
+    再读 ``current_user`` 的属性会在这个代理上递归。这种情况按匿名失败关闭，
+    改走 IP 桶，不再碰 ``current_user``。
+    """
+    if not has_request_context():
+        return None
+    try:
+        real_g = g._get_current_object()
+    except Exception:
+        return None
+    if real_g.__dict__.get('_rate_limit_identity_resolving'):
+        return None
+
+    def _usable(user):
+        if user is None or isinstance(user, LocalProxy):
+            return None
+        try:
+            if getattr(user, 'is_authenticated', False):
+                return user
+        except Exception:
+            return None
+        return None
+
+    if '_login_user' in real_g.__dict__:
+        return _usable(real_g.__dict__.get('_login_user'))
+
+    real_g.__dict__['_rate_limit_identity_resolving'] = True
+    try:
+        if not getattr(current_user, 'is_authenticated', False):
+            return None
+        return _usable(current_user._get_current_object())
+    except Exception:
+        return None
+    finally:
+        real_g.__dict__.pop('_rate_limit_identity_resolving', None)
+
+
 def rate_limit_key():
     """按正式用户或受信客户端 IP 分桶。
 
     正式登录用户：``user:<id>``。
     游客（is_guest / role=guest / id 前缀 guest:）与未登录：``ip:<client_ip>``。
     游客每次 GET /guest 会换新 id，不能按 user id 限流。
+    身份还没加载、是匿名用户，或会话代理尚未展开时，按 IP 失败关闭。
     """
-    if getattr(current_user, 'is_authenticated', False) and not _is_guest_rate_limit_subject(current_user):
-        uid = str(getattr(current_user, 'id', '') or '')
-        return f"user:{uid}"
+    user = _authenticated_rate_limit_user()
+    if user is not None and not _is_guest_rate_limit_subject(user):
+        uid = str(getattr(user, 'id', '') or '')
+        if uid:
+            return f"user:{uid}"
     return f"ip:{_client_ip_for_rate_limit()}"
 
 

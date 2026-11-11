@@ -29,7 +29,7 @@ from core.db_models import (
 )
 from core.time_utils import today_local, date_to_utc_start, date_to_utc_end, utc_to_local_date, utcnow
 from utils.parsers import parse_date
-from utils.csv_export import spreadsheet_cell
+from utils.csv_export import spreadsheet_cell, spreadsheet_frame
 from utils.validators import sanitize_input
 
 logger = logging.getLogger(__name__)
@@ -3120,15 +3120,17 @@ def reports_export():
         import pandas as pd
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            pd.DataFrame([summary]).to_excel(writer, index=False, sheet_name='summary')
-            pd.DataFrame(disease_stats, columns=['disease_category', 'count']).to_excel(
-                writer, index=False, sheet_name='top_diseases'
+            spreadsheet_frame(pd.DataFrame([summary])).to_excel(
+                writer, index=False, sheet_name='summary'
             )
-            pd.DataFrame([{
+            spreadsheet_frame(pd.DataFrame(
+                disease_stats, columns=['disease_category', 'count']
+            )).to_excel(writer, index=False, sheet_name='top_diseases')
+            spreadsheet_frame(pd.DataFrame([{
                 'avg_temperature': avg_temp,
                 'avg_humidity': avg_humidity,
                 'avg_aqi': avg_aqi
-            }]).to_excel(writer, index=False, sheet_name='weather')
+            }])).to_excel(writer, index=False, sheet_name='weather')
         output.seek(0)
         filename = f"{title}_{end_date}.xlsx"
         return send_file(
@@ -3191,13 +3193,13 @@ def annual_report():
         HealthRiskAssessment.user_id == current_user.id,
         HealthRiskAssessment.assessment_date >= date_to_utc_start(start_date),
         HealthRiskAssessment.assessment_date <= date_to_utc_end(end_date)
-    ).all()
+    ).limit(1000).all()
 
     diary_entries = HealthDiary.query.filter(
         HealthDiary.user_id == current_user.id,
         HealthDiary.entry_date >= start_date,
         HealthDiary.entry_date <= end_date
-    ).all()
+    ).limit(1000).all()
 
     risk_scores = [a.risk_score for a in assessments if a.risk_score is not None]
     avg_risk = round(sum(risk_scores) / len(risk_scores), 2) if risk_scores else None
@@ -3315,10 +3317,11 @@ def pilot_export_csv():
     days = request.args.get('days', default=30, type=int)
     days = max(1, min(days, 365))
     start_ts = utcnow() - timedelta(days=days)
+    export_max_rows = max(1, int(current_app.config.get('USAGE_EXPORT_MAX_ROWS', 2000)))
 
     events = UsageEvent.query.filter(
         UsageEvent.created_at >= start_ts
-    ).order_by(UsageEvent.created_at.desc()).all()
+    ).order_by(UsageEvent.created_at.desc(), UsageEvent.id.desc()).limit(export_max_rows).all()
 
     out = io.StringIO()
     writer = csv.writer(out)

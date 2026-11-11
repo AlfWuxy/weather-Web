@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="referrer" content="strict-origin">
+    <title>风险分布地图</title>
+    <style>
+        html, body, #map {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #f8fafc;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <script>
+    (function () {
+        'use strict';
+
+        var CREDENTIAL_RE = /^[A-Za-z0-9_-]{20,100}$/;
+        var COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+        var NONCE_RE = /^[a-f0-9]{32}$/;
+        var CHANNEL = 'amap-sandbox';
+        var MAX_ITEMS = 300;
+        var LNG_MIN = -180;
+        var LNG_MAX = 180;
+        var LAT_MIN = -90;
+        var LAT_MAX = 90;
+        var RADIUS_MIN = 1;
+        var RADIUS_MAX = 5000;
+
+        function isOpaqueScriptSandbox() {
+            if (window.parent === window) return false;
+            try {
+                // 同源 iframe 能读到 frameElement，说明没有不透明源隔离。
+                if (window.frameElement) return false;
+            } catch (err) {
+                // Firefox 对跨源/不透明源读取 frameElement 会抛 SecurityError。
+                // 这本身就是隔离证据，该项检查通过，继续核对 origin 与父文档。
+            }
+            if (window.origin !== 'null') return false;
+            try {
+                void window.parent.document;
+                return false;
+            } catch (err) {
+                return true;
+            }
+        }
+
+        if (!isOpaqueScriptSandbox()) return;
+
+        var trustedOrigin = '';
+        var sessionNonce = '';
+        var phase = 'idle';
+        var map = null;
+        var overlays = [];
+        var stagedItems = null;
+        var stagedFocus = null;
+        var helloTimer = 0;
+        var helloStopTimer = 0;
+        var sdkTimer = 0;
+        var parentPostMessage = function () {};
+
+        try {
+            parentPostMessage = window.parent.postMessage.bind(window.parent);
+        } catch (err) {
+            parentPostMessage = function (message, targetOrigin) {
+                window.parent.postMessage(message, targetOrigin);
+            };
+        }
+
+        function normalizeHttpOrigin(origin) {
+            if (typeof origin !== 'string' || origin.length < 8 || origin.length > 200) return '';
+            if (origin === 'null') return '';
+            var parsed;
+            try {
+                parsed = new URL(origin);
+            } catch (err) {
+                return '';
+            }
+            if (parsed.origin !== origin) return '';
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+            if (parsed.username || parsed.password) return '';
+            return parsed.origin;
+        }
+
+        function deliverToParent(message, targetOrigin) {
+            try {
+                parentPostMessage(message, targetOrigin);
+            } catch (err) {
+                try {
+                    window.parent.postMessage(message, targetOrigin);
+                } catch (err2) {}
+            }
+        }
+
+        function postParent(type) {
+            if (!trustedOrigin || !sessionNonce || window.parent === window) return;
+            deliverToParent({
+                channel: CHANNEL,
+                type: type,
+                nonce: sessionNonce
+            }, trustedOrigin);
+        }
+
+        function sendBootstrapHello() {
+            if (phase !== 'idle') return;
+            // 锁定父源之前没有密钥。hello 只发给 window.parent，用来请父页面开始 init。
+            deliverToParent({ channel: CHANNEL, type: 'hello' }, trustedOrigin || '*');
+        }
+
+        function clearSandboxTimers() {
+            window.clearInterval(helloTimer);
+            window.clearTimeout(helloStopTimer);
+            window.clearTimeout(sdkTimer);
+            helloTimer = 0;
+            helloStopTimer = 0;
+            sdkTimer = 0;
+        }
+
+        function failClosed() {
+            if (phase === 'dead' || phase === 'ready') return;
+            phase = 'dead';
+            stagedItems = null;
+            stagedFocus = null;
+            clearSandboxTimers();
+            try {
+                if (map && typeof map.destroy === 'function') map.destroy();
+            } catch (err) {}
+            map = null;
+            overlays = [];
+            postParent('unavailable');
+        }
+
+        function credentialOk(value) {
+            return typeof value === 'string' && CREDENTIAL_RE.test(value);
+        }
+
+        function escapeHtml(value) {
+            return String(value == null ? '' : value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function clampText(value, maxLen) {
+            var text = '';
+            if (typeof value === 'string') text = value;
+            else if (typeof value === 'number' && Number.isFinite(value)) text = String(value);
+            else return '';
+            text = text.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim();
+            if (text.length > maxLen) text = text.slice(0, maxLen);
+            return text;
+        }
+
+        function cssHex(color) {
+            return typeof color === 'string' && COLOR_RE.test(color) ? color : '';
+        }
+
+        function readFinite(value, min, max) {
+            if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+            if (value < min || value > max) return null;
+            return value;
+        }
+
+        function readCoord(lng, lat) {
+            var safeLng = readFinite(lng, LNG_MIN, LNG_MAX);
+            var safeLat = readFinite(lat, LAT_MIN, LAT_MAX);
+            if (safeLng === null || safeLat === null) return null;
+            return [safeLng, safeLat];
+        }
+
+        function normalizeItem(raw) {
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+            var coords = readCoord(raw.lng, raw.lat);
+            var radius = readFinite(raw.radius, RADIUS_MIN, RADIUS_MAX);
+            var color = cssHex(raw.color);
+            if (!coords || radius === null || !color) return null;
+            var community = clampText(raw.community, 100);
+            return {
+                community: community,
+                coords: coords,
+                radius: radius,
+                color: color,
+                shortName: clampText(raw.shortName, 8),
+                valueText: clampText(raw.valueText, 32),
+                label: clampText(raw.label, 40),
+                heatriskLabel: clampText(raw.heatriskLabel, 40) || '--',
+                riskIndexText: clampText(raw.riskIndexText, 24) || '--',
+                sviText: clampText(raw.sviText, 24) || '--',
+                historicalText: clampText(raw.historicalText, 24) || '--',
+                hotspot: clampText(raw.hotspot, 40) || '--',
+                actionHint: clampText(raw.actionHint, 80)
+            };
+        }
+
+        function normalizeItems(raw) {
+            if (!Array.isArray(raw)) return null;
+            var items = [];
+            var limit = Math.min(raw.length, MAX_ITEMS);
+            for (var i = 0; i < limit; i += 1) {
+                var item = normalizeItem(raw[i]);
+                if (item) items.push(item);
+            }
+            return items;
+        }
+
+        function markerHtml(item) {
+            return [
+                '<div style="background:', item.color, ';color:#fff;border:2px solid #fff;border-radius:16px;',
+                'padding:4px 8px;font-size:11px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,0.3);',
+                'text-align:center;min-width:58px;">',
+                '<div>', escapeHtml(item.shortName), '</div>',
+                '<div style="font-size:10px;opacity:0.9;">', escapeHtml(item.valueText), '</div>',
+                '</div>'
+            ].join('');
+        }
+
+        function infoHtml(item) {
+            var community = item.community || '--';
+            return [
+                '<div class="cr-info-window" style="width:min(300px,calc(100vw - 72px));max-width:300px;padding:10px;">',
+                '<div style="font-weight:700;color:', item.color, ';margin-bottom:8px;">', escapeHtml(community), '</div>',
+                '<div style="font-size:12px;margin-bottom:4px;">天气关注：<strong>', escapeHtml(item.label), '</strong></div>',
+                '<div style="font-size:12px;margin-bottom:4px;">风险等级：<strong>', escapeHtml(item.heatriskLabel), '</strong></div>',
+                '<div style="font-size:12px;margin-bottom:4px;">综合风险：<strong>', escapeHtml(item.riskIndexText), '</strong></div>',
+                '<div style="font-size:12px;margin-bottom:4px;">社区脆弱性：<strong>', escapeHtml(item.sviText), '</strong></div>',
+                '<div style="font-size:12px;margin-bottom:4px;">历史健康负担：<strong>', escapeHtml(item.historicalText), '</strong></div>',
+                '<div style="font-size:12px;margin-bottom:6px;">热点状态：<strong>', escapeHtml(item.hotspot), '</strong></div>',
+                '<div style="font-size:12px;color:#475569;border-top:1px solid #e5e7eb;padding-top:6px;">', escapeHtml(item.actionHint), '</div>',
+                '</div>'
+            ].join('');
+        }
+
+        function clearOverlays() {
+            if (map && overlays.length) {
+                var removeList = [];
+                for (var i = 0; i < overlays.length; i += 1) {
+                    var item = overlays[i];
+                    try {
+                        if (item.infoWindow && typeof item.infoWindow.close === 'function') item.infoWindow.close();
+                    } catch (err) {}
+                    if (item.circle) removeList.push(item.circle);
+                    if (item.marker) removeList.push(item.marker);
+                }
+                try {
+                    if (removeList.length) map.remove(removeList);
+                } catch (err) {}
+            }
+            overlays = [];
+        }
+
+        function addOne(item) {
+            var AMap = window.AMap;
+            var coords = item.coords;
+            var circle = new AMap.Circle({
+                center: coords,
+                radius: item.radius,
+                strokeColor: item.color,
+                strokeWeight: 2,
+                strokeOpacity: 0.9,
+                fillColor: item.color,
+                fillOpacity: 0.24,
+                zIndex: 60
+            });
+            var marker = new AMap.Marker({
+                position: coords,
+                offset: new AMap.Pixel(-30, -20),
+                content: markerHtml(item),
+                zIndex: 120
+            });
+            var infoWindow = new AMap.InfoWindow({
+                isCustom: false,
+                offset: new AMap.Pixel(0, -25),
+                content: infoHtml(item)
+            });
+            var open = function () {
+                try {
+                    infoWindow.open(map, coords);
+                } catch (err) {}
+            };
+            marker.on('click', open);
+            circle.on('click', open);
+            map.add([circle, marker]);
+            overlays.push({
+                circle: circle,
+                marker: marker,
+                infoWindow: infoWindow,
+                coords: coords,
+                community: item.community
+            });
+        }
+
+        function drawItems(items) {
+            clearOverlays();
+            if (!map) return;
+            for (var i = 0; i < items.length; i += 1) {
+                try {
+                    addOne(items[i]);
+                } catch (err) {}
+            }
+            if (overlays.length > 0) {
+                try {
+                    map.setFitView();
+                } catch (err) {}
+            }
+        }
+
+        function findFocusEntry(data) {
+            var name = clampText(data && data.community, 100);
+            if (name) {
+                for (var i = 0; i < overlays.length; i += 1) {
+                    var named = overlays[i];
+                    if (named && named.community === name) return named;
+                }
+            }
+            var index = data && data.index;
+            if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= overlays.length) return null;
+            return overlays[index] || null;
+        }
+
+        function doFocus(data) {
+            if (!map || !data) return;
+            var entry = findFocusEntry(data);
+            var coords = entry && entry.coords ? entry.coords : readCoord(data.lng, data.lat);
+            if (!coords) return;
+            try {
+                map.setZoomAndCenter(14, coords);
+            } catch (err) {
+                return;
+            }
+            if (!entry || !entry.infoWindow) return;
+            try {
+                entry.infoWindow.open(map, entry.coords || coords);
+            } catch (err) {}
+        }
+
+        function flushStaged() {
+            if (Array.isArray(stagedItems)) {
+                var items = stagedItems;
+                stagedItems = null;
+                drawItems(items);
+            }
+            if (stagedFocus) {
+                var focus = stagedFocus;
+                stagedFocus = null;
+                doFocus(focus);
+            }
+        }
+
+        function handleRender(data) {
+            if (phase === 'dead') return;
+            var items = normalizeItems(data && data.items);
+            if (!items) return;
+            if (phase === 'ready' && map) {
+                drawItems(items);
+                return;
+            }
+            stagedItems = items;
+        }
+
+        function handleFocus(data) {
+            if (phase === 'dead' || !data) return;
+            var focus = {
+                index: data.index,
+                community: data.community,
+                lng: data.lng,
+                lat: data.lat
+            };
+            if (phase === 'ready' && map) {
+                doFocus(focus);
+                return;
+            }
+            stagedFocus = focus;
+        }
+
+        function handleClear() {
+            stagedItems = null;
+            stagedFocus = null;
+            if (phase === 'dead') return;
+            if (map) clearOverlays();
+        }
+
+        function installControls() {
+            var AMap = window.AMap;
+            if (!AMap || !map) return;
+            var add = function () {
+                try {
+                    if (AMap.Scale) map.addControl(new AMap.Scale());
+                    if (AMap.ToolBar) map.addControl(new AMap.ToolBar());
+                } catch (err) {}
+            };
+            if (AMap.Scale && AMap.ToolBar) {
+                add();
+                return;
+            }
+            if (typeof AMap.plugin === 'function') {
+                try {
+                    AMap.plugin(['AMap.Scale', 'AMap.ToolBar'], add);
+                } catch (err) {}
+            }
+        }
+
+        function onMapComplete() {
+            if (phase !== 'loading') return;
+            phase = 'ready';
+            clearSandboxTimers();
+            flushStaged();
+            postParent('ready');
+        }
+
+        function bootMap() {
+            if (phase !== 'loading') return;
+            var AMap = window.AMap;
+            if (!AMap || typeof AMap.Map !== 'function' || typeof AMap.Circle !== 'function' || typeof AMap.Marker !== 'function' || typeof AMap.InfoWindow !== 'function' || typeof AMap.Pixel !== 'function') {
+                failClosed();
+                return;
+            }
+            try {
+                map = new AMap.Map('map', {
+                    zoom: 12,
+                    center: [116.2, 29.27],
+                    mapStyle: 'amap://styles/normal',
+                    viewMode: '2D'
+                });
+                installControls();
+                map.on('complete', onMapComplete);
+            } catch (err) {
+                failClosed();
+            }
+        }
+
+        function appendSdk(key) {
+            var script = document.createElement('script');
+            script.async = true;
+            try {
+                script.referrerPolicy = 'strict-origin';
+            } catch (err) {}
+            script.src = 'https://webapi.amap.com/maps?v=2.0&key=' + encodeURIComponent(key) + '&plugin=AMap.Scale,AMap.ToolBar';
+            script.onload = function () {
+                bootMap();
+            };
+            script.onerror = function () {
+                failClosed();
+            };
+            sdkTimer = window.setTimeout(failClosed, 7000);
+            document.head.appendChild(script);
+        }
+
+        function handleInit(data) {
+            if (!data || typeof data.nonce !== 'string' || !NONCE_RE.test(data.nonce)) return;
+            if (phase !== 'idle') {
+                if (data.nonce !== sessionNonce) return;
+                if (phase === 'ready') postParent('ready');
+                else if (phase === 'dead') postParent('unavailable');
+                else postParent('hello');
+                return;
+            }
+            sessionNonce = data.nonce;
+            window.clearInterval(helloTimer);
+            helloTimer = 0;
+            if (!credentialOk(data.key) || !credentialOk(data.securityJsCode)) {
+                phase = 'dead';
+                clearSandboxTimers();
+                postParent('unavailable');
+                return;
+            }
+            phase = 'loading';
+            window._AMapSecurityConfig = {
+                securityJsCode: data.securityJsCode
+            };
+            postParent('hello');
+            appendSdk(data.key);
+        }
+
+        function onParentMessage(event) {
+            if (event.source !== window.parent) return;
+            var origin = normalizeHttpOrigin(event.origin);
+            if (!origin) return;
+            if (!trustedOrigin) trustedOrigin = origin;
+            else if (origin !== trustedOrigin) return;
+
+            var data = event.data;
+            if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+            if (data.channel !== CHANNEL || typeof data.type !== 'string') return;
+            if (sessionNonce && data.nonce !== sessionNonce) return;
+            if (!sessionNonce && data.type !== 'init') return;
+
+            if (data.type === 'init') handleInit(data);
+            else if (data.type === 'render') handleRender(data);
+            else if (data.type === 'focus') handleFocus(data);
+            else if (data.type === 'clear') handleClear();
+        }
+
+        window.addEventListener('message', onParentMessage);
+        sendBootstrapHello();
+        helloTimer = window.setInterval(sendBootstrapHello, 250);
+        helloStopTimer = window.setTimeout(function () {
+            window.clearInterval(helloTimer);
+            helloTimer = 0;
+        }, 7500);
+    })();
+    </script>
+</body>
+</html>

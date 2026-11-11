@@ -2,10 +2,12 @@
 """API routes."""
 import json
 import logging
+import time
 
 from flask import current_app, jsonify, request
 from flask_login import current_user, login_required
 
+from core.community_access import can_view_community_health_stats, community_min_sample_size
 from core.constants import DEFAULT_CITY_LABEL
 from core.guest import is_guest_user
 from core.notifications import create_notification
@@ -22,9 +24,18 @@ from core.weather import (
 )
 from core.db_models import Community, FamilyMember, Pair
 from core.extensions import db
-from core.usage import log_usage_event
+from core.usage import UsageQuotaError, log_usage_event
 from core.input_limits import validate_event_meta
-from core.resource_budget import ResourceLimitError, ResourceBudgetUnavailable
+from core.resource_budget import (
+    ResourceBudgetUnavailable,
+    ResourceLimitError,
+    UpstreamBusy,
+    acquire_lease,
+    get_upstream_cache,
+    release_lease,
+    reserve_upstream,
+    upstream_inflight_slot,
+)
 from utils.parsers import parse_date, parse_int, safe_json_loads
 from utils.error_handlers import handle_api_exception
 from utils.validators import sanitize_input
@@ -173,6 +184,27 @@ def _api_current_weather():
     return jsonify({'success': False, 'message': '暂无天气数据'})
 
 
+def _wait_nowcast_cache(cache, cache_key, timeout=1.0):
+    """未抢到单飞锁时，最多等待 timeout 秒并反复读取短临缓存。"""
+    deadline = time.monotonic() + timeout
+    while True:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        time.sleep(min(0.05, remaining))
+
+
+def _nowcast_busy_response():
+    return jsonify({'success': False, 'error': '短临天气服务繁忙，请稍后再试'}), 429
+
+
+def _nowcast_unavailable_response():
+    return jsonify({'success': False, 'error': '服务暂不可用'}), 503
+
+
 def _api_weather_nowcast():
     """获取未来小时级降水时间轴（短临预报）"""
     location = sanitize_input(request.args.get('location'), max_length=100)
@@ -187,17 +219,49 @@ def _api_weather_nowcast():
         hours = 6
     hours = max(1, min(hours, 24))
 
+    cache = get_upstream_cache()
+    cache_key = ('nowcast', location, hours)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return jsonify({'success': True, 'data': cached}), 200
+
     weather_service = get_weather_fetcher()
     if weather_service is None or not hasattr(weather_service, 'get_short_term_nowcast'):
         return jsonify({'success': False, 'message': '短临服务未启用', 'data': {'available': False, 'timeline': []}})
 
+    lease = None
     try:
-        nowcast = weather_service.get_short_term_nowcast(location, hours=hours)
+        lease = acquire_lease(f"{location}:{hours}", ttl_seconds=15, namespace='nowcast')
+        if not lease:
+            cached = _wait_nowcast_cache(cache, cache_key, timeout=1.0)
+            if cached is not None:
+                return jsonify({'success': True, 'data': cached}), 200
+            return _nowcast_busy_response()
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return jsonify({'success': True, 'data': cached}), 200
+
+        with upstream_inflight_slot('WEATHER', timeout=2.0):
+            reserve_upstream('WEATHER', units=1)
+            nowcast = weather_service.get_short_term_nowcast(location, hours=hours)
+        if isinstance(nowcast, dict) and nowcast.get('available'):
+            ttl = current_app.config.get('NOWCAST_CACHE_TTL_SECONDS', 600)
+            cache.set(cache_key, nowcast, ttl)
+        return jsonify({'success': True, 'data': nowcast})
+    except UpstreamBusy:
+        return _nowcast_busy_response()
+    except ResourceLimitError:
+        return jsonify({'success': False, 'error': '服务额度已用完，请稍后再试'}), 429
+    except ResourceBudgetUnavailable:
+        return _nowcast_unavailable_response()
     except (ValueError, TypeError, RuntimeError, OSError) as exc:
         logger.warning("Nowcast fetch failed: %s", exc)
         nowcast = {'available': False, 'timeline': [], 'reason': 'fetch_failed'}
-
-    return jsonify({'success': True, 'data': nowcast})
+        return jsonify({'success': True, 'data': nowcast})
+    finally:
+        if lease:
+            release_lease(lease)
 
 
 def api_v1_current_weather():
@@ -214,15 +278,27 @@ def _api_community_risk_map():
     """获取社区风险地图数据"""
     communities = Community.query.all()
     data = []
+    min_sample = community_min_sample_size()
 
     for community in communities:
+        authorized = can_view_community_health_stats(community.name)
+        sample_ok = community.population is not None and community.population >= min_sample
+        if authorized:
+            stats_redacted = False
+            stats_suppressed = not sample_ok
+        else:
+            stats_redacted = True
+            stats_suppressed = False
+        hide_stats = stats_redacted or stats_suppressed
         data.append({
             'name': community.name,
             'latitude': community.latitude,
             'longitude': community.longitude,
-            'risk_level': community.risk_level,
-            'vulnerability_index': community.vulnerability_index,
-            'population': community.population
+            'risk_level': None if hide_stats else community.risk_level,
+            'vulnerability_index': None if hide_stats else community.vulnerability_index,
+            'population': None if hide_stats else community.population,
+            'stats_redacted': stats_redacted,
+            'stats_suppressed': stats_suppressed,
         })
 
     return jsonify({'success': True, 'data': data})
@@ -332,11 +408,13 @@ def _api_ml_predict_community():
 
         data = request.get_json() or {}
 
-        # 获取社区信息
+        # 获取社区信息。库内老龄率/慢病比例只对能查看该社区健康统计的账号可见。
         community_id = data.get('community_id')
         if community_id:
             community = db.session.get(Community, community_id)
             if community:
+                if not can_view_community_health_stats(community.name):
+                    return jsonify({'success': False, 'error': '无权查看该社区健康统计'}), 403
                 community_info = {
                     'name': community.name,
                     'elderly_ratio': community.elderly_ratio,
@@ -738,15 +816,42 @@ def api_community_risk_map_v2():
     return api_v1_community_risk_map_v2()
 
 
+_RESTRICTED_COMMUNITY_STAT_FIELDS = (
+    'population',
+    'elderly_ratio',
+    'chronic_disease_ratio',
+    'vulnerability_index',
+    'vulnerability_level',
+    'risk_level',
+    'baseline_visits',
+)
+
+
+def _restricted_community_profile(profile):
+    """脱敏或小样本时只保留坐标，医疗统计置空，不返回可反推字段。"""
+    restricted = {
+        'name': profile.get('name'),
+        'latitude': profile.get('latitude'),
+        'longitude': profile.get('longitude'),
+        'stats_redacted': bool(profile.get('stats_redacted')),
+        'stats_suppressed': bool(profile.get('stats_suppressed')),
+    }
+    for field in _RESTRICTED_COMMUNITY_STAT_FIELDS:
+        restricted[field] = None
+    return restricted
+
+
 def _api_community_vulnerability(community_name):
     """获取单个社区脆弱性指数"""
     try:
         from services.community_risk_service import get_community_service
 
         community_service = get_community_service()
-        profile = community_service.get_community_profile(community_name)
+        profile = community_service.get_community_profile(community_name, respect_access=True)
 
         if profile:
+            if profile.get('stats_redacted') or profile.get('stats_suppressed'):
+                profile = _restricted_community_profile(profile)
             return jsonify({
                 'success': True,
                 'community': profile
@@ -773,7 +878,7 @@ def _api_community_list():
         from services.community_risk_service import get_community_service
 
         community_service = get_community_service()
-        communities = community_service.get_all_communities()
+        communities = community_service.get_all_communities(respect_access=True)
 
         return jsonify({
             'success': True,
@@ -1157,8 +1262,11 @@ def _api_usage_event():
             member_id=resolved_member_id,
             source=source,
             meta=meta,
+            enforce_quota=True,
         )
         return jsonify({'success': True})
+    except UsageQuotaError:
+        return jsonify({'success': False, 'error': '事件上报配额已满，请稍后再试'}), 429
     except RecursionError:
         return jsonify({'success': False, 'error': 'meta_too_deep'}), 400
     except INPUT_EXCEPTIONS as exc:

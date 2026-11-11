@@ -95,8 +95,10 @@ def test_web_creation_error_does_not_log_input(app, client, db_session, monkeypa
         db_session.add(user)
         db_session.commit()
         uid = user.id
+        from core.extensions import db
+        login_id = db.session.get(User, uid).get_id()
     with client.session_transaction() as session:
-        session['_user_id'] = str(uid)
+        session['_user_id'] = login_id
         session['_fresh'] = True
         session['_csrf_token'] = 'privacy-csrf'
 
@@ -186,12 +188,21 @@ def test_usage_error_does_not_log_sql_parameters(app, db_session, monkeypatch, c
     from core.usage import log_usage_event
     from core.extensions import db
 
-    def fail():
+    commits = []
+    real_commit = db.session.commit
+
+    def tracking_commit(*args, **kwargs):
+        commits.append(True)
+        return real_commit(*args, **kwargs)
+
+    def fail(conn, values):
         raise RuntimeError('query parameters: ' + ADDRESS)
 
     with app.app_context(), caplog.at_level(logging.DEBUG):
-        monkeypatch.setattr(db.session, 'commit', fail)
+        monkeypatch.setattr(db.session, 'commit', tracking_commit)
+        monkeypatch.setattr('core.usage._insert_event', fail)
         assert log_usage_event('pair_created', meta={'location_query': ADDRESS}) is None
+    assert commits == []
     assert ADDRESS not in caplog.text
 
 

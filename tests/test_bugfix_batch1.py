@@ -290,7 +290,8 @@ class TestMpApiAtomicCreate:
             assert member is not None, "应创建 FamilyMember"
             assert pair is not None, "应创建 Pair"
             assert pair.member_id == member.id
-            assert bool(pair.short_code), "应生成短码"
+            assert pair.short_code is None
+            assert bool(pair.short_code_hash)
             assert bool(pair.elder_code), "应生成老人码"
 
     def test_missing_fields_rejected(self, app, client):

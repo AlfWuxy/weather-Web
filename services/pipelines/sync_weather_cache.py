@@ -17,7 +17,7 @@ from core.app import create_app  # noqa: E402
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.db_models import WeatherCache, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402
-from core.weather import normalize_location_name  # noqa: E402
+from core.weather import normalize_location_name, weather_sync_bypass  # noqa: E402
 from core.time_utils import today_local, utcnow  # noqa: E402
 from services.weather_service import WeatherService  # noqa: E402
 
@@ -84,7 +84,7 @@ def _resolve_locations(locations):
 
 
 def sync_weather_cache(locations=None, update_daily=True):
-    with app.app_context():
+    with app.app_context(), weather_sync_bypass():
         locations = list(_dedupe_locations(_resolve_locations(locations)))
         if not locations:
             locations = list(_dedupe_locations([DEFAULT_CITY_LABEL]))

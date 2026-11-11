@@ -57,9 +57,15 @@ def main():
                 print(f'❌ {p}: ERROR - {e}')
 
     print("\n=== 登录后测试（admin） ===")
+    from core.db_models import User
+    from core.extensions import db
+
+    with app.app_context():
+        admin = db.session.get(User, 1)
+        admin_login_id = admin.get_id() if admin is not None else '1'
     with app.test_client() as client:
         with client.session_transaction() as sess:
-            sess['_user_id'] = '1'  # admin user id
+            sess['_user_id'] = admin_login_id
             sess['_csrf_token'] = 'test-token'
 
         test_pages = ['/admin', '/user/dashboard']

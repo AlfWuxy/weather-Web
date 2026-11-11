@@ -42,6 +42,13 @@
     height: 100%;
 }
 
+.community-risk-page #map iframe {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+}
+
 .community-risk-page .cr-kpi-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -264,7 +271,11 @@
                 </div>
                 <div class="card-body p-2">
                     <div class="cr-map-wrap">
-                        <div id="map"></div>
+                        <div id="map">
+                            {% if amap_key %}
+                            <iframe id="amapFrame" title="风险分布地图" sandbox="allow-scripts" referrerpolicy="strict-origin" src="{{ url_for('static', filename='amap-sandbox.html') }}"></iframe>
+                            {% endif %}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -484,39 +495,49 @@
 {% endblock %}
 
 {% block extra_js %}
-{% if amap_security_js_code %}
-<script type="text/javascript">
-    window._AMapSecurityConfig = {
-        securityJsCode: {{ amap_security_js_code|tojson }}
-    };
-</script>
-{% endif %}
-{% if amap_key %}
-<script src="https://webapi.amap.com/maps?v=2.0&key={{ amap_key|urlencode }}&plugin=AMap.Scale,AMap.ToolBar"></script>
-{% endif %}
 <script>
 const communities = {{ communities|tojson|safe }};
 const communityCoords = {{ community_coords|tojson|safe }};
 
-let map = null;
-if (typeof AMap !== 'undefined') {
-    map = new AMap.Map('map', {
-        zoom: 12,
-        center: [116.2, 29.27],
-        mapStyle: 'amap://styles/normal',
-        viewMode: '2D'
-    });
+const amapFrame = document.getElementById('amapFrame');
+const AMAP_CREDENTIAL = /^[A-Za-z0-9_-]{20,100}$/;
+let mapReady = false;
+let mapDegraded = false;
+let amapHelloSeen = false;
+let amapInitSent = false;
+let amapReadyTimer = 0;
+let riskPageStarted = false;
+{% if amap_key %}
+const amapKey = {{ amap_key|tojson }};
+const amapSecurityJsCode = {{ (amap_security_js_code or '')|tojson }};
+{% else %}
+const amapKey = '';
+const amapSecurityJsCode = '';
+{% endif %}
 
-    AMap.plugin(['AMap.Scale', 'AMap.ToolBar'], function() {
-        map.addControl(new AMap.Scale());
-        map.addControl(new AMap.ToolBar());
-    });
-} else {
-    const mapContainer = document.getElementById('map');
-    if (mapContainer) {
-        mapContainer.innerHTML = '<div class="h-100 d-flex align-items-center justify-content-center text-center text-muted p-4"><div><i class="bi bi-map fs-2 d-block mb-2"></i>地图密钥未配置，风险表格与指标仍可正常查看。</div></div>';
+function createAmapNonce() {
+    const bytes = new Uint8Array(16);
+    if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+        window.crypto.getRandomValues(bytes);
+    } else {
+        for (let i = 0; i < bytes.length; i += 1) {
+            bytes[i] = Math.floor(Math.random() * 256);
+        }
     }
+    let nonce = '';
+    for (let i = 0; i < bytes.length; i += 1) {
+        nonce += bytes[i].toString(16).padStart(2, '0');
+    }
+    return nonce;
 }
+const amapNonce = createAmapNonce();
+
+{% if not amap_key %}
+const mapContainer = document.getElementById('map');
+if (mapContainer) {
+    mapContainer.innerHTML = '<div class="h-100 d-flex align-items-center justify-content-center text-center text-muted p-4"><div><i class="bi bi-map fs-2 d-block mb-2"></i>地图密钥未配置，风险表格与指标仍可正常查看。</div></div>';
+}
+{% endif %}
 
 let riskOverlays = [];
 let riskRows = [];
@@ -813,6 +834,7 @@ function renderLayerLegend(layerKey) {
     });
 }
 
+// 弹窗样式和行动文案留在本页；沙箱只接收字段，转义后再画覆盖物。
 function buildInfoWindowHtml(row, style) {
     const historicalAvailable = row.historical_component_available === true;
     const rrText = historicalAvailable && row.sir !== null && row.sir !== undefined
@@ -840,26 +862,16 @@ function buildInfoWindowHtml(row, style) {
 }
 
 function clearRiskOverlays() {
-    if (!map) {
-        riskOverlays = [];
-        riskCoords = {};
-        return;
-    }
-    riskOverlays.forEach(item => {
-        if (item.circle) {
-            map.remove(item.circle);
-        }
-        if (item.marker) {
-            map.remove(item.marker);
-        }
-    });
     riskOverlays = [];
     riskCoords = {};
+    if (mapReady) {
+        postToAmap('clear');
+    }
 }
 
 function addRiskOverlays(rankings, layerKey) {
     clearRiskOverlays();
-    if (!map || typeof AMap === 'undefined') {
+    if (!mapReady) {
         return;
     }
 
@@ -873,64 +885,50 @@ function addRiskOverlays(rankings, layerKey) {
     });
 
     const radii = computeCircleRadii(candidates);
-
-    const points = [];
+    const items = [];
     candidates.forEach((item, index) => {
         const row = item.row;
         const coords = item.coords;
-
         const style = getLayerStyle(row, layerKey);
         const radius = Math.max(20, toNumber(radii[index], 120) || 120);
-        const circle = new AMap.Circle({
-            center: coords,
+        const historicalAvailable = row.historical_component_available === true;
+        const rrText = historicalAvailable && row.sir !== null && row.sir !== undefined
+            ? formatNumber(row.sir, 2)
+            : '数据不足';
+        const riskIndex = toNumber(row.risk_index, null);
+        const actionHint = riskIndex !== null && riskIndex >= 70
+            ? '优先安排提醒和走访。'
+            : riskIndex !== null && riskIndex >= 40
+                ? '持续关注，并提前确认避暑安排。'
+                : '保持日常关注。';
+
+        items.push({
+            community: safeText(row.community, ''),
+            lng: coords[0],
+            lat: coords[1],
             radius: radius,
-            strokeColor: style.color,
-            strokeWeight: 2,
-            strokeOpacity: 0.9,
-            fillColor: style.color,
-            fillOpacity: 0.24,
-            zIndex: 60
+            color: style.color,
+            shortName: safeText(row.community, '').slice(0, 4),
+            valueText: safeText(style.valueText, ''),
+            label: safeText(style.label, ''),
+            heatriskLabel: safeText(row.heatrisk_label, '--'),
+            riskIndexText: formatNumber(row.risk_index, 1),
+            sviText: `${formatNumber(row.svi_percentile, 1)}%`,
+            historicalText: rrText,
+            hotspot: safeText(row.hotspot_category, '--'),
+            actionHint: actionHint
         });
-
-        const shortName = safeText(row.community, '').slice(0, 4);
-        const markerHtml = [
-            `<div style="background:${style.color};color:#fff;border:2px solid #fff;border-radius:16px;`,
-            'padding:4px 8px;font-size:11px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,0.3);',
-            'text-align:center;min-width:58px;">',
-            `<div>${escapeHtml(shortName)}</div>`,
-            `<div style="font-size:10px;opacity:0.9;">${escapeHtml(style.valueText)}</div>`,
-            '</div>'
-        ].join('');
-
-        const marker = new AMap.Marker({
-            position: coords,
-            offset: new AMap.Pixel(-30, -20),
-            content: markerHtml,
-            zIndex: 120
-        });
-
-        const infoWindow = new AMap.InfoWindow({
-            isCustom: false,
-            offset: new AMap.Pixel(0, -25),
-            content: buildInfoWindowHtml(row, style)
-        });
-
-        marker.on('click', () => infoWindow.open(map, coords));
-        circle.on('click', () => infoWindow.open(map, coords));
-
-        map.add([circle, marker]);
-        riskOverlays.push({ circle, marker, coords, infoWindow, community: row.community });
+        riskOverlays.push({ coords: coords, community: row.community });
         riskCoords[row.community] = coords;
-        points.push(coords);
     });
 
-    if (points.length > 0) {
-        map.setFitView();
+    if (items.length > 0) {
+        postToAmap('render', { items: items });
     }
 }
 
 function focusOnCommunity(communityName, index) {
-    if (!map) {
+    if (!mapReady) {
         return;
     }
     let coords = null;
@@ -940,12 +938,15 @@ function focusOnCommunity(communityName, index) {
         coords = riskCoords[communityName];
     }
 
-    if (coords && coords.length === 2) {
-        map.setZoomAndCenter(14, coords);
-        if (riskOverlays[index] && riskOverlays[index].infoWindow) {
-            riskOverlays[index].infoWindow.open(map, coords);
-        }
+    if (!coords || coords.length !== 2 || !Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) {
+        return;
     }
+    postToAmap('focus', {
+        index: index,
+        community: communityName || '',
+        lng: coords[0],
+        lat: coords[1]
+    });
 }
 
 function renderRanking(rankings, layerKey) {
@@ -1326,7 +1327,6 @@ function loadRiskMap() {
     const analysisDate = document.getElementById('analysisDate').value;
     const windowDays = document.getElementById('windowDays').value;
     const disease = document.getElementById('diseaseFilter').value;
-    const layerKey = document.getElementById('layerSelect').value;
     const weatherAlert = document.getElementById('weatherUnavailableAlert');
     if (weatherAlert) {
         weatherAlert.classList.add('d-none');
@@ -1358,6 +1358,7 @@ function loadRiskMap() {
             throw new Error(data && data.message ? data.message : '风险数据请求失败');
         }
 
+        const layerKey = layerSelect.value;
         riskRows = Array.isArray(data.rankings) ? data.rankings : [];
         renderLayerLegend(layerKey);
         addRiskOverlays(riskRows, layerKey);
@@ -1412,14 +1413,111 @@ if (layerSelect) {
     });
 }
 
-if (map) {
-    map.on('complete', function() {
-        renderLayerLegend('risk_index');
-        loadRiskMap();
-    });
-} else {
+function beginCommunityRisk() {
+    if (riskPageStarted) return;
+    riskPageStarted = true;
     renderLayerLegend('risk_index');
     loadRiskMap();
+}
+
+function stopAmapTimers() {
+    window.clearTimeout(amapReadyTimer);
+    amapReadyTimer = 0;
+}
+
+function showMapFallback(message) {
+    const container = document.getElementById('map');
+    if (!container) return;
+    while (container.firstChild) {
+        container.removeChild(container.firstChild);
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'h-100 d-flex align-items-center justify-content-center text-center text-muted p-4';
+    const inner = document.createElement('div');
+    const icon = document.createElement('i');
+    icon.className = 'bi bi-map fs-2 d-block mb-2';
+    inner.appendChild(icon);
+    inner.appendChild(document.createTextNode(message));
+    wrap.appendChild(inner);
+    container.appendChild(wrap);
+}
+
+function degradeAmap() {
+    if (mapDegraded || mapReady) return;
+    mapDegraded = true;
+    stopAmapTimers();
+    showMapFallback('地图暂时不可用，风险表格与指标仍可正常查看。');
+    beginCommunityRisk();
+}
+
+function markAmapReady() {
+    if (mapDegraded || mapReady) return;
+    mapReady = true;
+    amapHelloSeen = true;
+    stopAmapTimers();
+    beginCommunityRisk();
+    if (riskRows.length > 0) {
+        addRiskOverlays(riskRows, layerSelect.value);
+    }
+}
+
+function amapNonceMatches(data) {
+    return !!data && typeof data.nonce === 'string' && data.nonce === amapNonce;
+}
+
+function postToAmap(type, extra) {
+    if (!amapFrame || mapDegraded) return;
+    if (type === 'init') {
+        if (amapHelloSeen || mapReady) return;
+    } else if (!mapReady) {
+        return;
+    }
+    const target = amapFrame.contentWindow;
+    if (!target) return;
+    const payload = extra ? Object.assign({}, extra) : {};
+    payload.channel = 'amap-sandbox';
+    payload.type = type;
+    payload.nonce = amapNonce;
+    try {
+        // 沙箱是不透明 null 源，targetOrigin 只能是 *，消息只发给这个 iframe。
+        target.postMessage(payload, '*');
+    } catch (err) {}
+}
+
+function onAmapSandboxMessage(event) {
+    if (mapDegraded) return;
+    if (!amapFrame || event.source !== amapFrame.contentWindow || event.origin !== 'null') return;
+    const data = event.data;
+    if (!data || typeof data !== 'object' || Array.isArray(data) || data.channel !== 'amap-sandbox') return;
+    if (data.type === 'hello' && amapNonceMatches(data)) {
+        amapHelloSeen = true;
+        return;
+    }
+    if (data.type === 'hello' && !amapInitSent) {
+        amapInitSent = true;
+        postToAmap('init', {
+            key: amapKey,
+            securityJsCode: amapSecurityJsCode
+        });
+        return;
+    }
+    if (data.type === 'ready' && amapNonceMatches(data)) {
+        markAmapReady();
+        return;
+    }
+    if (data.type === 'unavailable' && amapNonceMatches(data)) {
+        degradeAmap();
+    }
+}
+
+if (!amapFrame) {
+    beginCommunityRisk();
+} else if (AMAP_CREDENTIAL.test(amapKey) && AMAP_CREDENTIAL.test(amapSecurityJsCode)) {
+    window.addEventListener('message', onAmapSandboxMessage);
+    amapReadyTimer = window.setTimeout(degradeAmap, 8000);
+    beginCommunityRisk();
+} else {
+    degradeAmap();
 }
 </script>
 {% endblock %}

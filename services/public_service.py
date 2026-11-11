@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Public-facing business logic extracted from blueprints."""
+import hashlib
+import hmac
 import json
 import logging
 import math
@@ -7,13 +9,21 @@ import secrets
 from datetime import timedelta
 from urllib.parse import urlparse
 
-from flask import current_app, flash, redirect, render_template, request, session, url_for
+from flask import current_app, flash, g, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_user, logout_user
 from sqlalchemy import or_
+from sqlalchemy.exc import SQLAlchemyError
 
 from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
-from core.security import hash_identifier, hash_pair_token, hash_short_code, rate_limit_key, verify_pair_token
+from core.security import (
+    _client_ip_for_rate_limit,
+    hash_identifier,
+    hash_pair_token,
+    hash_short_code,
+    rate_limit_key,
+    verify_pair_token,
+)
 from core.time_utils import today_local, utcnow, ensure_utc_aware
 from core.usage import log_usage_event
 from core.weather import (
@@ -39,6 +49,7 @@ from services.heat_action_service import HeatActionService
 from utils.parsers import parse_bool, parse_float
 from utils.audit_log import log_security_event
 from utils.database import atomic_transaction
+from utils.log_safety import has_unsafe_log_chars, install_control_char_filter
 from utils.validators import (
     validate_username,
     validate_password,
@@ -49,6 +60,7 @@ from utils.validators import (
 )
 
 logger = logging.getLogger(__name__)
+install_control_char_filter(logger)
 
 HEAT_RISK_LABELS = {
     'low': '低风险',
@@ -61,6 +73,11 @@ PAIR_TOKEN_SESSION_KEY = 'pair_token'
 IDENTITY_SCOPED_SESSION_KEYS = frozenset({
     'pair_session_id',
     'pair_session_code',
+    'pair_session_code_hash',
+    'pair_action_grant',
+    'pair_link_exchange',
+    'pair_credential_reveal',
+    'register_challenge_nonce',
     PAIR_TOKEN_SESSION_KEY,
     'last_api_token_plain',
     'last_mini_link_code',
@@ -148,6 +165,13 @@ def _normalize_login_identifier(username):
     return normalized
 
 
+def _config_int(name, default):
+    try:
+        return int(current_app.config.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 def _login_lockout_key(username):
     normalized = _normalize_login_identifier(username)
     if not normalized:
@@ -155,28 +179,49 @@ def _login_lockout_key(username):
     return f'login_failures:{normalized}'
 
 
-def _login_attempt_key_hash(username):
-    """按用户名生成登录失败计数键（哈希后落库）。"""
+def _login_client_ip():
+    return _client_ip_for_rate_limit() or 'unknown'
+
+
+def _login_ip_token(client_ip):
+    """Redis 键只放稳定摘要，避免把原始 IP 或控制字符写进键名。"""
+    token = hash_identifier(f'login-ip:{client_ip or "unknown"}')
+    if not token:
+        return 'unknown'
+    return token[:32]
+
+
+def _login_ip_lockout_key(username, client_ip):
     normalized = _normalize_login_identifier(username)
     if not normalized:
         return None
+    return f'login_failures:{normalized}:ip:{_login_ip_token(client_ip)}'
+
+
+def _login_attempt_key_hash(username, client_ip=None):
+    """按用户名（以及可选 IP）生成登录失败计数键（哈希后落库）。"""
+    normalized = _normalize_login_identifier(username)
+    if not normalized:
+        return None
+    if client_ip:
+        return hash_identifier(f"login:{normalized}|ip:{client_ip}")
     return hash_identifier(f"login:{normalized}")
 
 
-def _get_login_attempt_record(username):
-    key_hash = _login_attempt_key_hash(username)
+def _get_login_attempt_record(username, client_ip=None, create=True):
+    key_hash = _login_attempt_key_hash(username, client_ip=client_ip)
     if not key_hash:
         return None
     attempt = ShortCodeAttempt.query.filter_by(key_hash=key_hash).order_by(ShortCodeAttempt.id.desc()).first()
-    if attempt is None:
+    if attempt is None and create:
         attempt = ShortCodeAttempt(key_hash=key_hash, failed_count=0)
         db.session.add(attempt)
     return attempt
 
 
-def _get_login_lock_state_from_db(username, max_failures, lockout_seconds):
-    """Redis 不可用时，使用数据库兜底登录锁定。"""
-    attempt = _get_login_attempt_record(username)
+def _get_login_lock_state_from_db(username, max_failures, lockout_seconds, client_ip=None):
+    """Redis 不可用时，使用数据库兜底登录锁定。只看当前 IP 键。"""
+    attempt = _get_login_attempt_record(username, client_ip=client_ip, create=False)
     if attempt is None:
         return False, 0
 
@@ -205,10 +250,10 @@ def _get_login_lock_state_from_db(username, max_failures, lockout_seconds):
     return False, 0
 
 
-def _record_login_failure_db(username, max_failures, lockout_seconds):
-    attempt = _get_login_attempt_record(username)
+def _record_login_failure_db(username, max_failures, lockout_seconds, client_ip=None, enforce_lock=True):
+    attempt = _get_login_attempt_record(username, client_ip=client_ip, create=True)
     if attempt is None:
-        return
+        return 0
 
     now = utcnow()
     last_failed_at = ensure_utc_aware(attempt.last_failed_at) if attempt.last_failed_at else None
@@ -221,13 +266,17 @@ def _record_login_failure_db(username, max_failures, lockout_seconds):
     if attempt.first_failed_at is None:
         attempt.first_failed_at = now
     attempt.last_failed_at = now
-    if attempt.failed_count >= max_failures:
+    if enforce_lock and attempt.failed_count >= max_failures:
         attempt.locked_until = now + timedelta(seconds=lockout_seconds)
+    elif not enforce_lock:
+        attempt.locked_until = None
+    count = int(attempt.failed_count or 0)
     db.session.commit()
+    return count
 
 
-def _clear_login_failures_db(username):
-    attempt = _get_login_attempt_record(username)
+def _clear_login_failures_db(username, client_ip=None):
+    attempt = _get_login_attempt_record(username, client_ip=client_ip, create=False)
     if attempt is None:
         return
     attempt.failed_count = 0
@@ -235,6 +284,13 @@ def _clear_login_failures_db(username):
     attempt.last_failed_at = None
     attempt.locked_until = None
     db.session.commit()
+
+
+def _maybe_log_login_global_alert(failure_count):
+    """全局失败计数只告警，不能把其他 IP 的正确密码一起锁死。"""
+    threshold = _config_int('LOGIN_GLOBAL_ALERT_FAILURES', 25)
+    if threshold > 0 and failure_count >= threshold:
+        logger.warning("登录失败全局计数达到告警阈值 (%s)", threshold)
 
 
 def _short_code_attempt_key_hash():
@@ -368,9 +424,10 @@ def _resolve_pair(short_code, token):
     # 防止重复赎回
     if link.redeemed_at:
         return None, '短码已被赎回，无法重复使用'
-    if not token:
+    exchange_ok = _pair_link_exchange_matches(link)
+    if not token and not exchange_ok:
         return None, '需要绑定令牌'
-    if not verify_pair_token(token, link.token_hash):
+    if token and not verify_pair_token(token, link.token_hash) and not exchange_ok:
         return None, '绑定令牌不匹配'
 
     # 查找或创建 Pair 记录
@@ -389,10 +446,11 @@ def _resolve_pair(short_code, token):
                 raise ResourceLimitError('短码已被使用，请重新获取')
             if not pair:
                 pair = _create_pair_record(link.caregiver_id, link.community_code, flush=True)
-                pair.short_code = link.short_code
-                pair.short_code_hash = link.short_code_hash or short_code_hash
                 db.session.flush()
                 link.pair_id = pair.id
+            # 兑换后只保留短码哈希，页面和数据库都不再持有明文短码。
+            pair.short_code = None
+            pair.short_code_hash = link.short_code_hash or short_code_hash
             link.status = 'redeemed'
             link.redeemed_at = utcnow()
             log_security_event(
@@ -617,9 +675,226 @@ def _resolve_action_routes(token=None, confirm_action=None, help_action=None, de
     return routes
 
 
+def _session_ttl_seconds():
+    ttl = _config_int('PAIR_ACTION_SESSION_TTL_SECONDS', 43200)
+    return ttl if ttl > 0 else 0
+
+
+def _pair_from_action_grant():
+    """回表核验换票：未撤销、未过期，且没有超出本次会话有效期。"""
+    grant = session.get('pair_action_grant')
+    if not isinstance(grant, dict):
+        return None
+    try:
+        pair_id = int(grant.get('pair_id'))
+        token_id = int(grant.get('action_token_id'))
+        issued_at = int(grant.get('issued_at'))
+    except (TypeError, ValueError):
+        session.pop('pair_action_grant', None)
+        return None
+    if int(utcnow().timestamp()) - issued_at > _session_ttl_seconds():
+        session.pop('pair_action_grant', None)
+        return None
+    record = db.session.get(PairActionToken, token_id)
+    if record is None or record.pair_id != pair_id or record.revoked_at:
+        session.pop('pair_action_grant', None)
+        return None
+    if ensure_utc_aware(record.expires_at) < utcnow():
+        session.pop('pair_action_grant', None)
+        return None
+    pair = Pair.query.filter_by(id=pair_id, status='active').first()
+    if not pair:
+        session.pop('pair_action_grant', None)
+        return None
+    return pair
+
+
+def _pair_link_exchange_matches(link):
+    """GET /e/<token> 已验过令牌哈希，提交短码时不必再保存明文 token。"""
+    if not link:
+        return False
+    data = session.get('pair_link_exchange')
+    if not isinstance(data, dict):
+        return False
+    try:
+        link_id = int(data.get('link_id'))
+        issued_at = int(data.get('issued_at'))
+    except (TypeError, ValueError):
+        session.pop('pair_link_exchange', None)
+        return False
+    if link_id != link.id:
+        return False
+    if int(utcnow().timestamp()) - issued_at > _session_ttl_seconds():
+        session.pop('pair_link_exchange', None)
+        return False
+    return True
+
+
+def _normalize_presented_short_code(value):
+    return (value or '').replace(' ', '').strip()
+
+
+def _submitted_short_code(source='form'):
+    raw = request.form.get('short_code') if source == 'form' else request.args.get('short_code')
+    code = sanitize_input(raw, max_length=12) or ''
+    return _normalize_presented_short_code(code)
+
+
+def _remember_pair_short_code_session(pair):
+    session['pair_session_id'] = pair.id
+    session['pair_session_code_hash'] = pair.short_code_hash
+    session.pop('pair_session_code', None)
+    session.pop('pair_action_grant', None)
+    session.pop('pair_link_exchange', None)
+
+
+def _carry_action_session(pair, token):
+    """后续表单不再回填明文短码，改由会话哈希或行动票据授权。"""
+    matched_pair, record = _active_pair_action_token(token) if token else (None, None)
+    if record and matched_pair and matched_pair.id == pair.id:
+        session['pair_action_grant'] = {
+            'pair_id': pair.id,
+            'action_token_id': record.id,
+            'issued_at': int(utcnow().timestamp()),
+        }
+        session['pair_session_id'] = pair.id
+        session['pair_session_code_hash'] = pair.short_code_hash
+        session.pop('pair_session_code', None)
+        session.pop('pair_link_exchange', None)
+        return
+    _remember_pair_short_code_session(pair)
+
+
+def _render_resolved_action(pair, token=None, confirm_action=None, help_action=None, debrief_action=None, focus_debrief=False):
+    pair.last_active_at = utcnow()
+    status_date = today_local()
+    status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
+        pair, status_date
+    )
+    db.session.commit()
+    action_routes = _resolve_action_routes(
+        token=token,
+        confirm_action=confirm_action,
+        help_action=help_action,
+        debrief_action=debrief_action,
+    )
+    return _render_action_page(
+        pair,
+        status,
+        actions,
+        resources,
+        weather_data,
+        heat_result,
+        risk_label,
+        risk_reasons=risk_reasons,
+        focus_debrief=focus_debrief,
+        **action_routes
+    )
+
+
+def _reject_if_short_code_locked(short_code):
+    """已锁定时直接拒绝，不再查询短码是否存在。空短码不走这条猜测锁定。"""
+    if not short_code or not _short_code_is_locked():
+        return None
+    flash('尝试次数过多，请稍后再试。', 'error')
+    return redirect(url_for('public.action_check'))
+
+
+def _reject_failed_short_code(short_code):
+    if short_code and _record_short_code_failure():
+        flash('尝试次数过多，请稍后再试。', 'error')
+    else:
+        flash('短码无效或已失效', 'error')
+    return redirect(url_for('public.action_check'))
+
+
+def _short_code_was_rejected(pair, short_code, token):
+    if not short_code:
+        return False
+    if not pair:
+        return True
+    if hash_short_code(short_code) != getattr(pair, 'short_code_hash', None):
+        return True
+    if not _pair_short_code_is_valid(pair) and not _validate_pair_action_token(pair, short_code, token):
+        return True
+    return False
+
+
+def _authorize_action_pair(token=None):
+    short_code = _submitted_short_code('form')
+    supplied = sanitize_input(request.form.get('token') or token, max_length=200)
+    if isinstance(supplied, str):
+        supplied = supplied.strip() or None
+    else:
+        supplied = None
+    locked = _reject_if_short_code_locked(short_code)
+    if locked is not None:
+        return None, locked
+    pair = _resolve_pair_from_session_or_code(short_code, token=supplied)
+    if not pair:
+        return None, _reject_failed_short_code(short_code)
+    on_token_route = request.path.startswith('/e/')
+    if (supplied or on_token_route) and not _validate_pair_token_binding(pair, short_code, supplied):
+        flash('短码或令牌无效，请联系照护人确认。', 'error')
+        return None, redirect(url_for('public.action_check'))
+    if short_code:
+        _clear_short_code_failures()
+    return pair, None
+
+
+def _reserve_anonymous_debrief_slot():
+    """未 opt-in 的匿名复盘按单 IP 与全站分别限当日行数。"""
+    ip_limit = _config_int('ANON_DEBRIEF_IP_DAILY_LIMIT', 20)
+    global_limit = _config_int('ANON_DEBRIEF_GLOBAL_DAILY_LIMIT', 500)
+    if ip_limit <= 0 or global_limit <= 0:
+        return False
+    today = today_local()
+    global_count = Debrief.query.filter(
+        Debrief.date == today,
+        Debrief.pair_id.is_(None),
+    ).count()
+    if global_count >= global_limit:
+        logger.info("匿名复盘已达到全站每日上限")
+        return False
+    client_ip = _client_ip_for_rate_limit() or 'unknown'
+    key_hash = hash_identifier(f'anon-debrief:{today.isoformat()}|ip:{client_ip}')
+    if not key_hash:
+        return False
+    attempt = ShortCodeAttempt.query.filter_by(key_hash=key_hash).order_by(ShortCodeAttempt.id.desc()).first()
+    used = int(attempt.failed_count or 0) if attempt else 0
+    if used >= ip_limit:
+        logger.info("匿名复盘已达到单 IP 每日上限")
+        return False
+    now = utcnow()
+    if attempt is None:
+        attempt = ShortCodeAttempt(
+            key_hash=key_hash,
+            failed_count=1,
+            first_failed_at=now,
+            last_failed_at=now,
+        )
+        db.session.add(attempt)
+    else:
+        attempt.failed_count = used + 1
+        attempt.last_failed_at = now
+        if attempt.first_failed_at is None:
+            attempt.first_failed_at = now
+    return True
+
+
 def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, help_action=None, debrief_action=None):
     if token:
         _store_pair_token(token)
+
+    if request.method == 'GET' and request.endpoint == 'public.action_check':
+        grant_pair = _pair_from_action_grant()
+        if grant_pair is not None:
+            return _render_resolved_action(
+                grant_pair,
+                confirm_action=confirm_action,
+                help_action=help_action,
+                debrief_action=debrief_action,
+            )
 
     if request.method == 'POST':
         if _short_code_is_locked():
@@ -663,33 +938,14 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
                 entry_action=entry_action
             )
 
-        session['pair_session_id'] = pair.id
-        session['pair_session_code'] = pair.short_code
-        pair.last_active_at = utcnow()
+        _carry_action_session(pair, token)
         _clear_short_code_failures()
         _clear_pair_token()
-
-        status_date = today_local()
-        status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
-            pair, status_date
-        )
-        db.session.commit()
-        action_routes = _resolve_action_routes(
-            token=token,
+        return _render_resolved_action(
+            pair,
             confirm_action=confirm_action,
             help_action=help_action,
-            debrief_action=debrief_action
-        )
-        return _render_action_page(
-            pair,
-            status,
-            actions,
-            resources,
-            weather_data,
-            heat_result,
-            risk_label,
-            risk_reasons=risk_reasons,
-            **action_routes
+            debrief_action=debrief_action,
         )
 
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
@@ -703,16 +959,31 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
 
 def _resolve_pair_from_session_or_code(short_code, token=None):
     pair = None
-    short_code = (short_code or '').replace(' ', '').strip()
+    short_code = _normalize_presented_short_code(short_code)
     if token is None:
         route_token = (request.view_args or {}).get('token')
         token = route_token or _get_pair_token()
-    session_pair_id = session.get('pair_session_id')
-    session_pair_code = session.get('pair_session_code')
-    if session_pair_id:
-        if not short_code:
+    elif isinstance(token, str):
+        token = token.strip() or None
+
+    grant_pair = _pair_from_action_grant()
+    if grant_pair is not None:
+        if short_code and hash_short_code(short_code) != getattr(grant_pair, 'short_code_hash', None):
             return None
-        if session_pair_code and session_pair_code != short_code:
+        return grant_pair
+
+    session_pair_id = session.get('pair_session_id')
+    legacy_code = session.get('pair_session_code')
+    stored_hash = session.get('pair_session_code_hash')
+    if session_pair_id:
+        if legacy_code:
+            # 测试仍会预置明文 pair_session_code；比对时只看哈希。
+            if not short_code or hash_short_code(legacy_code) != hash_short_code(short_code):
+                return None
+        elif stored_hash:
+            if short_code and stored_hash != hash_short_code(short_code):
+                return None
+        elif not short_code:
             return None
         pair = Pair.query.filter_by(id=session_pair_id, status='active').first()
         if (
@@ -755,17 +1026,10 @@ def _validate_pair_token_binding(pair, short_code, token):
 
 
 def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None):
-    short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
-    short_code = short_code.replace(' ', '').strip()
+    pair, rejection = _authorize_action_pair(token=token)
+    if rejection is not None:
+        return rejection
     token = sanitize_input(request.form.get('token') or token, max_length=200)
-    pair = _resolve_pair_from_session_or_code(short_code, token=token)
-    if not pair:
-        flash('短码无效或已失效', 'error')
-        return redirect(url_for('public.action_check'))
-
-    if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
-        flash('短码或令牌无效，请联系照护人确认。', 'error')
-        return redirect(url_for('public.action_check'))
     status_date = today_local()
     status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
         pair, status_date
@@ -785,7 +1049,8 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
     )
     _refresh_community_daily(pair.community_code, status_date)
     flash('已记录今日确认。', 'success')
-    action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
+    _carry_action_session(pair, token)
+    action_routes = _resolve_action_routes(confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
         status,
@@ -800,17 +1065,10 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
 
 
 def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
-    short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
-    short_code = short_code.replace(' ', '').strip()
+    pair, rejection = _authorize_action_pair(token=token)
+    if rejection is not None:
+        return rejection
     token = sanitize_input(request.form.get('token') or token, max_length=200)
-    pair = _resolve_pair_from_session_or_code(short_code, token=token)
-    if not pair:
-        flash('短码无效或已失效', 'error')
-        return redirect(url_for('public.action_check'))
-
-    if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
-        flash('短码或令牌无效，请联系照护人确认。', 'error')
-        return redirect(url_for('public.action_check'))
     status_date = today_local()
     status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
         pair, status_date
@@ -830,7 +1088,8 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
     )
     _refresh_community_daily(pair.community_code, status_date)
     flash('已记录求助，照护人将收到提醒。', 'success')
-    action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
+    _carry_action_session(pair, token)
+    action_routes = _resolve_action_routes(confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
         status,
@@ -845,23 +1104,26 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
 
 
 def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None, focus_debrief=False):
-    short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
-    short_code = short_code.replace(' ', '').strip()
+    pair, rejection = _authorize_action_pair(token=token)
+    if rejection is not None:
+        return rejection
     token = sanitize_input(request.form.get('token') or token, max_length=200)
-    pair = _resolve_pair_from_session_or_code(short_code, token=token)
-    if not pair:
-        flash('短码无效或已失效', 'error')
-        return redirect(url_for('public.action_check'))
-
-    if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
-        flash('短码或令牌无效，请联系照护人确认。', 'error')
-        return redirect(url_for('public.action_check'))
     status_date = today_local()
     q1 = sanitize_input(request.form.get('question_1'), max_length=200)
     q2 = sanitize_input(request.form.get('question_2'), max_length=200)
     q3 = sanitize_input(request.form.get('question_3'), max_length=200)
     difficulty = sanitize_input(request.form.get('difficulty'), max_length=500)
     optin = request.form.get('debrief_optin') == '1'
+
+    if not optin and not _reserve_anonymous_debrief_slot():
+        flash('今日匿名复盘已达上限，请稍后再试。', 'error')
+        return _render_resolved_action(
+            pair,
+            token=token,
+            confirm_action=confirm_action,
+            debrief_action=debrief_action,
+            focus_debrief=focus_debrief,
+        )
 
     if optin:
         debrief = Debrief.query.filter_by(pair_id=pair.id, date=status_date).first()
@@ -894,11 +1156,12 @@ def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None,
     )
     _refresh_community_daily(pair.community_code, status_date)
     flash('复盘已提交，感谢反馈。', 'success')
+    _carry_action_session(pair, token)
 
     status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
         pair, status_date
     )
-    action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
+    action_routes = _resolve_action_routes(confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
         status,
@@ -911,6 +1174,74 @@ def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None,
         focus_debrief=focus_debrief,
         **action_routes
     )
+
+
+def _active_pair_action_token(token):
+    token_hash = hash_pair_token((token or '').strip())
+    if not token_hash:
+        return None, None
+    record = PairActionToken.query.filter_by(token_hash=token_hash).order_by(PairActionToken.id.desc()).first()
+    if not record or record.revoked_at or ensure_utc_aware(record.expires_at) < utcnow():
+        return None, None
+    pair = Pair.query.filter_by(id=record.pair_id, status='active').first()
+    if not pair:
+        return None, None
+    return pair, record
+
+
+def _active_unredeemed_pair_link(token):
+    token_hash = hash_pair_token((token or '').strip())
+    if not token_hash:
+        return None
+    link = PairLink.query.filter_by(token_hash=token_hash).order_by(PairLink.id.desc()).first()
+    if not link or link.redeemed_at or link.status != 'active':
+        return None
+    if link.expires_at and ensure_utc_aware(link.expires_at) < utcnow():
+        return None
+    return link
+
+
+def handle_elder_token_entry(token):
+    """把 URL 令牌换成会话票据，地址栏不再保留明文 token。"""
+    token = (sanitize_input(token, max_length=200) or '').strip()
+    session.pop(PAIR_TOKEN_SESSION_KEY, None)
+    try:
+        if token:
+            pair, record = _active_pair_action_token(token)
+            if pair and record:
+                session['pair_action_grant'] = {
+                    'pair_id': pair.id,
+                    'action_token_id': record.id,
+                    'issued_at': int(utcnow().timestamp()),
+                }
+                session.pop('pair_link_exchange', None)
+                return redirect(url_for('public.action_check'), code=303)
+            link = _active_unredeemed_pair_link(token)
+            if link:
+                session['pair_link_exchange'] = {
+                    'link_id': link.id,
+                    'issued_at': int(utcnow().timestamp()),
+                }
+    except SQLAlchemyError:
+        db.session.rollback()
+        logger.warning("行动链接换票失败，已回到短码入口")
+    return redirect(url_for('public.action_check'), code=303)
+
+
+def _handle_token_debrief_get(token):
+    token = (sanitize_input(token, max_length=200) or '').strip()
+    short_code = _submitted_short_code('args')
+    locked = _reject_if_short_code_locked(short_code)
+    if locked is not None:
+        return locked
+    pair = _resolve_pair_from_session_or_code(short_code, token=token)
+    if not pair or not _validate_pair_token_binding(pair, short_code, token):
+        if _short_code_was_rejected(pair, short_code, token):
+            _record_short_code_failure()
+        return redirect(url_for('public.elder_token_entry', token=token))
+    if short_code:
+        _clear_short_code_failures()
+    return _render_resolved_action(pair, token=token, focus_debrief=True)
 
 
 def render_role_entry():
@@ -969,10 +1300,73 @@ def render_role_entry():
     )
 
 
+def _clear_login_failure_counters(redis_client, normalized_username, client_ip, global_key, ip_key):
+    if redis_client:
+        try:
+            if ip_key:
+                redis_client.delete(ip_key)
+            if global_key:
+                redis_client.delete(global_key)
+        except Exception:
+            logger.warning("Redis 清除失败计数失败，回退数据库兜底", exc_info=True)
+            redis_client = None
+    if not redis_client:
+        try:
+            _clear_login_failures_db(normalized_username, client_ip=client_ip)
+            _clear_login_failures_db(normalized_username)
+        except Exception:
+            logger.warning("数据库清除失败计数失败", exc_info=True)
+    return redis_client
+
+
+def _record_login_failure_counters(redis_client, normalized_username, client_ip, global_key, ip_key, max_failures, lockout_seconds):
+    if redis_client:
+        try:
+            pipe = redis_client.pipeline()
+            if global_key:
+                pipe.incr(global_key)
+                pipe.expire(global_key, lockout_seconds)
+            if ip_key:
+                pipe.incr(ip_key)
+                pipe.expire(ip_key, lockout_seconds)
+            pipe.execute()
+            global_count = int(redis_client.get(global_key) or 0) if global_key else 0
+            _maybe_log_login_global_alert(global_count)
+            return redis_client
+        except Exception:
+            logger.warning("Redis 递增失败计数失败，回退数据库兜底", exc_info=True)
+            redis_client = None
+    if not redis_client:
+        try:
+            _record_login_failure_db(
+                normalized_username,
+                max_failures,
+                lockout_seconds,
+                client_ip=client_ip,
+                enforce_lock=True,
+            )
+            global_count = _record_login_failure_db(
+                normalized_username,
+                max_failures,
+                lockout_seconds,
+                enforce_lock=False,
+            )
+            _maybe_log_login_global_alert(global_count)
+        except Exception:
+            logger.warning("数据库递增失败计数失败", exc_info=True)
+    return redis_client
+
+
 def handle_login(next_url):
     if request.method == 'POST':
-        # 输入验证
-        username = request.form.get('username', '').strip()
+        # 脏用户名先拒绝：不写日志正文，也不进入 Redis / 数据库键。
+        raw_username = request.form.get('username') or ''
+        if not isinstance(raw_username, str) or has_unsafe_log_chars(raw_username):
+            logger.warning("登录请求包含不安全字符，已拒绝")
+            flash('用户名或密码错误', 'error')
+            return render_template('login.html', next=next_url)
+
+        username = raw_username.strip()
         normalized_username = _normalize_login_identifier(username)
         password = request.form.get('password', '')
         remember_flag = request.form.get('remember') in ('1', 'on', 'true', 'yes')
@@ -989,8 +1383,10 @@ def handle_login(next_url):
 
         user = User.query.filter_by(username=username).first()
 
-        # 账户锁定检查（防暴力破解）
-        lockout_key = _login_lockout_key(normalized_username)
+        # 硬锁定按 (用户名, IP)；全局键只累计并在尖峰时告警。
+        client_ip = _login_client_ip()
+        global_key = _login_lockout_key(normalized_username)
+        ip_key = _login_ip_lockout_key(normalized_username, client_ip)
         max_failures = current_app.config.get('LOGIN_MAX_FAILURES', 5)
         lockout_seconds = current_app.config.get('LOGIN_LOCKOUT_SECONDS', 300)
         redis_client = None
@@ -1000,11 +1396,11 @@ def handle_login(next_url):
         except Exception:
             logger.warning("Redis 客户端初始化失败，登录锁定将回退数据库兜底", exc_info=True)
 
-        if redis_client:
+        if redis_client and ip_key:
             try:
-                fail_count = int(redis_client.get(lockout_key) or 0)
+                fail_count = int(redis_client.get(ip_key) or 0)
                 if fail_count >= max_failures:
-                    ttl = redis_client.ttl(lockout_key)
+                    ttl = redis_client.ttl(ip_key)
                     remaining = max(ttl, 0)
                     logger.warning("账户被锁定(redis): %s (剩余%ds)", username, remaining)
                     flash(f'登录失败次数过多，请 {remaining // 60 + 1} 分钟后再试', 'error')
@@ -1015,7 +1411,12 @@ def handle_login(next_url):
 
         if not redis_client:
             try:
-                db_locked, db_remaining = _get_login_lock_state_from_db(normalized_username, max_failures, lockout_seconds)
+                db_locked, db_remaining = _get_login_lock_state_from_db(
+                    normalized_username,
+                    max_failures,
+                    lockout_seconds,
+                    client_ip=client_ip,
+                )
                 if db_locked:
                     logger.warning("账户被锁定(db): %s (剩余%ds)", username, db_remaining)
                     flash(f'登录失败次数过多，请 {db_remaining // 60 + 1} 分钟后再试', 'error')
@@ -1024,18 +1425,13 @@ def handle_login(next_url):
                 logger.warning("数据库锁定检查失败", exc_info=True)
 
         if user and user.check_password(password):
-            # 登录成功，清除失败计数
-            if redis_client:
-                try:
-                    redis_client.delete(lockout_key)
-                except Exception:
-                    logger.warning("Redis 清除失败计数失败，回退数据库兜底", exc_info=True)
-                    redis_client = None
-            if not redis_client:
-                try:
-                    _clear_login_failures_db(normalized_username)
-                except Exception:
-                    logger.warning("数据库清除失败计数失败", exc_info=True)
+            _clear_login_failure_counters(
+                redis_client,
+                normalized_username,
+                client_ip,
+                global_key,
+                ip_key,
+            )
             _clear_identity_scoped_session()
             login_user(
                 user,
@@ -1058,30 +1454,81 @@ def handle_login(next_url):
             }.get(user.role, 'user.user_dashboard')
             return redirect(url_for(landing_endpoint))
 
-        # 登录失败，递增失败计数
-        if redis_client:
-            try:
-                pipe = redis_client.pipeline()
-                pipe.incr(lockout_key)
-                pipe.expire(lockout_key, lockout_seconds)
-                pipe.execute()
-            except Exception:
-                logger.warning("Redis 递增失败计数失败，回退数据库兜底", exc_info=True)
-                redis_client = None
-        if not redis_client:
-            try:
-                _record_login_failure_db(normalized_username, max_failures, lockout_seconds)
-            except Exception:
-                logger.warning("数据库递增失败计数失败", exc_info=True)
-
+        _record_login_failure_counters(
+            redis_client,
+            normalized_username,
+            client_ip,
+            global_key,
+            ip_key,
+            max_failures,
+            lockout_seconds,
+        )
         logger.warning("登录失败: %s", username)
         flash('用户名或密码错误', 'error')
 
     return render_template('login.html', next=next_url)
 
 
+def _register_challenge_signature(nonce, ts_text):
+    secret = current_app.config.get('SECRET_KEY') or ''
+    if isinstance(secret, str):
+        secret = secret.encode('utf-8')
+    payload = f'{nonce}.{ts_text}'.encode('utf-8')
+    return hmac.new(secret, payload, hashlib.sha256).hexdigest()
+
+
+def _issue_register_challenge():
+    nonce = secrets.token_hex(16)
+    ts_text = str(int(utcnow().timestamp()))
+    session['register_challenge_nonce'] = nonce
+    signature = _register_challenge_signature(nonce, ts_text)
+    return f'{nonce}.{ts_text}.{signature}'
+
+
+def _register_challenge_is_enforced():
+    if not current_app.config.get('REGISTER_CHALLENGE_REQUIRED', True):
+        return False
+    if current_app.config.get('TESTING') and not current_app.config.get('REGISTER_CHALLENGE_ENFORCE_IN_TESTS'):
+        return False
+    return True
+
+
+def _consume_register_challenge(presented):
+    expected_nonce = session.pop('register_challenge_nonce', None)
+    if not expected_nonce or not isinstance(presented, str):
+        return False
+    parts = presented.split('.')
+    if len(parts) != 3:
+        return False
+    nonce, ts_text, signature = parts
+    if not nonce or not ts_text or not signature:
+        return False
+    if len(nonce) != len(str(expected_nonce)) or not secrets.compare_digest(str(expected_nonce), nonce):
+        return False
+    try:
+        issued = int(ts_text)
+    except (TypeError, ValueError):
+        return False
+    ttl = _config_int('REGISTER_CHALLENGE_TTL_SECONDS', 600)
+    if ttl <= 0:
+        ttl = 600
+    now = int(utcnow().timestamp())
+    if issued > now + 60 or now - issued > ttl:
+        return False
+    expected_sig = _register_challenge_signature(nonce, ts_text)
+    if len(signature) != len(expected_sig):
+        return False
+    return secrets.compare_digest(expected_sig, signature)
+
+
 def handle_register():
     if request.method == 'POST':
+        if _register_challenge_is_enforced():
+            presented = request.form.get('register_challenge') or ''
+            if not _consume_register_challenge(presented):
+                flash('注册校验已过期，请刷新页面后重试', 'error')
+                return redirect(url_for('public.register'))
+
         # 验证用户名
         valid, result = validate_username(request.form.get('username'))
         if not valid:
@@ -1117,8 +1564,12 @@ def handle_register():
             return redirect(url_for('public.register'))
         gender = result
 
-        # 社区信息
-        community = sanitize_input(request.form.get('community'), max_length=100)
+        # 社区信息：超长原文在清洗前直接拒绝，避免先截断再入库。
+        raw_community = request.form.get('community')
+        if isinstance(raw_community, str) and len(raw_community) > 200:
+            flash('所属社区内容过长', 'error')
+            return redirect(url_for('public.register'))
+        community = sanitize_input(raw_community, max_length=100)
 
         # 检查用户名是否已存在
         if User.query.filter_by(username=username).first():
@@ -1128,6 +1579,20 @@ def handle_register():
         # 检查邮箱是否已存在
         if email and User.query.filter_by(email=email).first():
             flash('邮箱已被注册', 'error')
+            return redirect(url_for('public.register'))
+
+        from core.resource_budget import ResourceBudgetUnavailable, ResourceLimitError, reserve_registration
+        ip_hash = hash_identifier(_client_ip_for_rate_limit() or 'unknown')
+        if not ip_hash:
+            flash('注册服务暂不可用，请稍后再试', 'error')
+            return redirect(url_for('public.register'))
+        try:
+            reserve_registration(ip_hash)
+        except ResourceLimitError:
+            flash('今日注册名额已满，请稍后再试', 'error')
+            return redirect(url_for('public.register'))
+        except ResourceBudgetUnavailable:
+            flash('注册服务暂不可用，请稍后再试', 'error')
             return redirect(url_for('public.register'))
 
         user = User(
@@ -1150,7 +1615,8 @@ def handle_register():
         return redirect(url_for('public.login'))
 
     communities = Community.query.all()
-    return render_template('register.html', communities=communities)
+    register_challenge = _issue_register_challenge()
+    return render_template('register.html', communities=communities, register_challenge=register_challenge)
 
 
 def render_cooling_resources_page(community, resource_type, has_ac_raw, is_accessible_raw, open_only, cooling_candidates=None):
@@ -1295,6 +1761,7 @@ def handle_guest_login(next_url=None):
 
 
 def handle_logout():
+    g.clear_site_data_on_logout = True
     _clear_identity_scoped_session()
     logout_user()
     return redirect(url_for('public.index'))

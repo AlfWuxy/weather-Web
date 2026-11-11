@@ -81,7 +81,7 @@ def test_deploy_script_excludes_root_analysis_dir():
     assert content.count(flag) == 1
     assert "--exclude '/analysis/'" not in content
 
-    rsync_starts = [idx for idx in range(len(content)) if content.startswith("rsync -avz", idx)]
+    rsync_starts = [idx for idx in range(len(content)) if content.startswith("rsync -rptvz --no-links --safe-links", idx)]
     assert len(rsync_starts) == 1
     for start in rsync_starts:
         end = content.find("$PROJECT_DIR/", start)

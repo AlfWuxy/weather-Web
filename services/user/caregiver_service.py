@@ -7,7 +7,8 @@ from datetime import datetime, timedelta
 from flask import current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user
 
-from core.db_models import Community, DailyStatus, Debrief, FamilyMember, Pair, PairLink
+from core.db_models import Community, DailyStatus, Debrief, FamilyMember, Pair, PairActionToken, PairLink
+from core.security import hash_short_code
 from core.extensions import db
 from core.guest import is_guest_user
 from core.time_utils import today_local, utcnow, local_datetime_to_utc
@@ -34,17 +35,21 @@ from ._common import (
     RELAY_STAGE_ORDER,
     _action_plan,
     _build_pair_action_link,
+    _create_pair_action_token,
     _create_pair_link_record,
     _create_pair_record,
+    _generate_short_code,
     _relay_stage_rank,
-    _require_roles
+    _require_roles,
+    _short_code_expires_at,
 )
 from ._helpers import (
     _auto_escalate_overdue_statuses,
     _build_caregiver_message,
     _build_community_snapshot,
     _build_recent_series,
-    _refresh_community_daily
+    _refresh_community_daily,
+    _without_short_code_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,16 +77,26 @@ def _heat_weather_available(weather_data):
     return True
 
 
-def _build_weather_waiting_message(pair, action_link):
+def _build_weather_waiting_message(pair, action_link, reveal_short_code=None):
     """天气不可用时只保留行动入口，不生成风险结论或风险建议。"""
     location = (pair.location_query or pair.community_code or '').strip()
+    action_link = _without_short_code_query(action_link)
     lines = [
         '【天气更新中】',
         '风险等级暂不显示。仍可打开行动页完成安全确认或求助。',
     ]
     if location:
         lines.append(f'地点：{location}')
-    lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
+    if action_link and reveal_short_code:
+        lines.append(f'（可选）行动页：{action_link}  短码：{reveal_short_code}')
+        lines.append('8位短码仅展示一次，请立即保存或告知老人')
+    elif action_link:
+        lines.append(f'（可选）行动页：{action_link}')
+    elif reveal_short_code:
+        lines.append(f'短码：{reveal_short_code}')
+        lines.append('8位短码仅展示一次，请立即保存或告知老人')
+    else:
+        lines.append('已启用哈希保护，如需重发请点击轮换凭证')
     return '\n'.join(lines)
 
 
@@ -137,6 +152,7 @@ def _create_pair(location_query, member_id=None):
     if not location_query:
         raise ValueError('location_query is required')
 
+    issued_short_code = None
     with atomic_transaction():
         pair = _create_pair_record(
             caregiver_id=current_user.id,
@@ -144,8 +160,15 @@ def _create_pair(location_query, member_id=None):
             member_id=member_id,
             flush=True
         )
+        issued_short_code = getattr(pair, 'issued_short_code', None)
+        pair_id = pair.id
+    if issued_short_code:
+        session['pair_credential_reveal'] = {
+            'pair_id': pair_id,
+            'short_code': issued_short_code,
+        }
     # one-time banner
-    session['created_pair_id'] = pair.id
+    session['created_pair_id'] = pair_id
     log_usage_event(
         'pair_created',
         user_id=current_user.id,
@@ -165,8 +188,60 @@ def _load_created_pair():
     return created_pair
 
 
+def _pop_pair_credential_reveal():
+    """取出当次明文短码，仅向该绑定的照护人或管理员展示一次。"""
+    reveal = session.pop('pair_credential_reveal', None)
+    if not isinstance(reveal, dict):
+        return None
+    short_code = reveal.get('short_code')
+    if not isinstance(short_code, str) or len(short_code) != 8 or not short_code.isdigit():
+        return None
+    try:
+        pair_id = int(reveal.get('pair_id'))
+    except (TypeError, ValueError):
+        return None
+    pair = Pair.query.filter_by(id=pair_id).first()
+    if not pair:
+        return None
+    is_owner = pair.caregiver_id == getattr(current_user, 'id', None)
+    is_admin = getattr(current_user, 'role', None) == 'admin'
+    if not is_owner and not is_admin:
+        return None
+    return {'pair_id': pair.id, 'short_code': short_code}
+
+
+def _load_pair_for_credential_manage(pair_id):
+    """拒绝游客，只允许绑定所属照护人或管理员管理凭证。"""
+    if is_guest_user(current_user):
+        flash('游客模式无法管理照护凭证', 'error')
+        return None
+    query = Pair.query.filter_by(id=pair_id)
+    if getattr(current_user, 'role', None) != 'admin':
+        query = query.filter_by(caregiver_id=current_user.id)
+    return query.first_or_404()
+
+
+def _redirect_after_credential_change(pair):
+    if getattr(current_user, 'role', None) in ('caregiver', 'admin'):
+        return redirect(url_for('user.caregiver_pair_detail', pair_id=pair.id))
+    return redirect(url_for('user.pair_management'))
+
+
+def _clear_pair_credential_reveal(pair_id):
+    reveal = session.get('pair_credential_reveal')
+    if not isinstance(reveal, dict):
+        return
+    try:
+        revealed_pair_id = int(reveal.get('pair_id'))
+    except (TypeError, ValueError):
+        return
+    if revealed_pair_id == pair_id:
+        session.pop('pair_credential_reveal', None)
+
+
 def _build_pair_management_context(caregiver_mode=False):
     created_pair = _load_created_pair()
+    credential_reveal = _pop_pair_credential_reveal()
     status_date = today_local()
     page_size = min(50, max(1, setting("PAIR_LIST_PAGE_SIZE", 20)))
     page = max(1, min(request.args.get("page", 1, type=int), 10000))
@@ -294,16 +369,24 @@ def _build_pair_management_context(caregiver_mode=False):
             relay_stage_label = RELAY_STAGE_LABELS.get(relay_stage, relay_stage)
         member = member_map.get(pair.member_id) if getattr(pair, 'member_id', None) else None
         action_link = _build_pair_action_link(pair)
+        reveal_short_code = None
+        if credential_reveal and credential_reveal.get('pair_id') == pair.id:
+            reveal_short_code = credential_reveal.get('short_code')
         reminder_message = (
             _build_caregiver_message(
                 pair,
                 alert_kind=alert_kind,
                 weather_data=weather_data,
                 member=member,
-                action_link=action_link
+                action_link=action_link,
+                reveal_short_code=reveal_short_code,
             )
             if weather_available
-            else _build_weather_waiting_message(pair, action_link)
+            else _build_weather_waiting_message(
+                pair,
+                action_link,
+                reveal_short_code=reveal_short_code,
+            )
         )
         pair_cards.append({
             'pair': pair,
@@ -332,6 +415,7 @@ def _build_pair_management_context(caregiver_mode=False):
     context = {
         'created_pair': created_pair,
         'created_action_link': created_action_link,
+        'credential_reveal': credential_reveal,
         'pairs': pairs,
         'pair_cards': pair_cards,
         'status_map': status_map,
@@ -466,14 +550,19 @@ def caregiver_pair_detail(pair_id):
     recent_series = _build_recent_series(pair.id, days=7)
     debrief_today = Debrief.query.filter_by(pair_id=pair.id, date=status_date).first()
     community_snapshot = _build_community_snapshot(pair.community_code, status_date)
+    credential_reveal = _pop_pair_credential_reveal()
     action_link = _build_pair_action_link(pair)
     db.session.commit()
-    wechat_template_url = url_for(
-        'user.caregiver_wechat_template',
-        short_code=pair.short_code,
-        token=action_link.rsplit('/e/', 1)[-1].split('?', 1)[0] if '/e/' in action_link else None,
-        community_code=pair.community_code
-    )
+    token = None
+    if action_link and '/e/' in action_link:
+        token = action_link.rsplit('/e/', 1)[-1].split('?', 1)[0]
+    wechat_params = {
+        'pair_id': pair.id,
+        'community_code': pair.community_code,
+    }
+    if token:
+        wechat_params['token'] = token
+    wechat_template_url = url_for('user.caregiver_wechat_template', **wechat_params)
     actions_today = safe_json_loads(status_today.caregiver_actions, []) if status_today else []
     if not isinstance(actions_today, list):
         actions_today = []
@@ -489,6 +578,8 @@ def caregiver_pair_detail(pair_id):
         community_snapshot=community_snapshot,
         status_date=status_date,
         wechat_template_url=wechat_template_url,
+        action_link=action_link,
+        credential_reveal=credential_reveal,
         action_options=CARE_ACTION_OPTIONS,
         actions_today=actions_today,
         caregiver_note=caregiver_note
@@ -544,38 +635,101 @@ def caregiver_action_log(pair_id):
     return redirect(url_for('user.caregiver_pair_detail', pair_id=pair.id))
 
 
+def caregiver_pair_credentials_revoke(pair_id):
+    """撤销该绑定全部未撤销行动链接，并让旧短码立即失效。"""
+    pair = _load_pair_for_credential_manage(pair_id)
+    if pair is None:
+        return redirect(url_for('user.user_dashboard'))
+
+    now = utcnow()
+    with atomic_transaction():
+        PairActionToken.query.filter(
+            PairActionToken.pair_id == pair.id,
+            PairActionToken.revoked_at.is_(None),
+        ).update(
+            {PairActionToken.revoked_at: now},
+            synchronize_session=False,
+        )
+        pair.short_code = None
+        pair.short_code_expires_at = now
+        log_security_event(
+            action='pair_credentials_revoked',
+            actor_id=getattr(current_user, 'id', None),
+            actor_role=getattr(current_user, 'role', None),
+            resource_type='pair',
+            resource_id=str(pair.id),
+            extra_data={'short_code_hash': pair.short_code_hash},
+        )
+    _clear_pair_credential_reveal(pair.id)
+    flash('照护凭证已撤销，旧链接和短码已失效。', 'success')
+    return _redirect_after_credential_change(pair)
+
+
+def caregiver_pair_credentials_rotate(pair_id):
+    """撤销旧行动链接，签发新链接，并轮换 8 位短码。明文只写入一次会话。"""
+    pair = _load_pair_for_credential_manage(pair_id)
+    if pair is None:
+        return redirect(url_for('user.user_dashboard'))
+
+    code = None
+    try:
+        with atomic_transaction():
+            code = _generate_short_code()
+            pair.short_code = None
+            pair.short_code_hash = hash_short_code(code)
+            pair.short_code_expires_at = _short_code_expires_at()
+            _create_pair_action_token(pair, flush=True, force_new=True)
+            log_security_event(
+                action='pair_credentials_rotated',
+                actor_id=getattr(current_user, 'id', None),
+                actor_role=getattr(current_user, 'role', None),
+                resource_type='pair',
+                resource_id=str(pair.id),
+                extra_data={'short_code_hash': pair.short_code_hash},
+            )
+    except ResourceLimitError as exc:
+        flash(str(exc), 'error')
+        return _redirect_after_credential_change(pair)
+    except Exception as exc:
+        logger.warning("轮换照护凭证失败，异常类型=%s", type(exc).__name__)
+        flash('轮换失败，请稍后重试。', 'error')
+        return _redirect_after_credential_change(pair)
+
+    session['pair_credential_reveal'] = {'pair_id': pair.id, 'short_code': code}
+    flash('已轮换凭证。', 'success')
+    return _redirect_after_credential_change(pair)
+
+
+def _find_caregiver_pair_for_template(pair_id, short_code):
+    """按 pair_id 或短码哈希查找照护人自己的绑定。"""
+    query = Pair.query
+    if getattr(current_user, 'role', None) != 'admin':
+        query = query.filter_by(caregiver_id=current_user.id)
+    if pair_id:
+        return query.filter_by(id=pair_id).first()
+    if short_code:
+        return query.filter_by(short_code_hash=hash_short_code(short_code)).first()
+    return None
+
+
 def caregiver_wechat_template():
     """照护人微信模板"""
     if not _require_roles('caregiver', 'admin'):
         return redirect(url_for('user.user_dashboard'))
 
+    pair_id = request.args.get('pair_id', type=int)
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
     token = sanitize_input(request.args.get('token'), max_length=200)
     community_code = sanitize_input(request.args.get('community_code'), max_length=100)
+    pair = _find_caregiver_pair_for_template(pair_id, short_code)
 
-    if not token and short_code:
-        pair_query = Pair.query.filter_by(short_code=short_code, status='active')
-        if getattr(current_user, 'role', None) != 'admin':
-            pair_query = pair_query.filter_by(caregiver_id=current_user.id)
-        pair = pair_query.first()
-        if pair:
-            action_link = _build_pair_action_link(pair)
-            db.session.commit()
-            token = action_link.rsplit('/e/', 1)[-1].split('?', 1)[0] if '/e/' in action_link else None
-
-    if token:
-        action_link = url_for(
-            'public.elder_token_entry',
-            token=token,
-            short_code=short_code,
-            _external=True
-        )
-    else:
-        action_link = url_for(
-            'public.elder_entry',
-            short_code=short_code,
-            _external=True
-        )
+    action_link = None
+    if not token and pair:
+        action_link = _build_pair_action_link(pair)
+        db.session.commit()
+    elif token:
+        action_link = url_for('public.elder_token_entry', token=token, _external=True)
+    action_link = _without_short_code_query(action_link)
 
     risk_label = None
     actions = []
@@ -589,13 +743,13 @@ def caregiver_wechat_template():
             actions = _action_plan(risk_label)
 
     if weather_available:
-        message_lines = [
-            '【高温行动提醒】',
-            f'行动链接：{action_link}',
-            f'短码：{short_code or "请填写"}'
-        ]
+        message_lines = ['【高温行动提醒】']
         if community_code:
-            message_lines.insert(1, f'社区：{community_code}')
+            message_lines.append(f'社区：{community_code}')
+        if action_link:
+            message_lines.append(f'行动链接：{action_link}')
+        else:
+            message_lines.append('行动链接暂不可用。已启用哈希保护，如需重发请点击轮换凭证。')
         message_lines.append(f'今日热风险：{risk_label}')
         message_lines.append('行动建议（非医疗诊断/治疗）：')
         for item in actions:
@@ -605,15 +759,17 @@ def caregiver_wechat_template():
         message_lines = [
             '【天气更新中】',
             '风险等级暂不显示。仍可打开行动页完成安全确认或求助。',
-            f'行动链接：{action_link}',
-            f'短码：{short_code or "请填写"}',
         ]
+        if action_link:
+            message_lines.append(f'行动链接：{action_link}')
+        else:
+            message_lines.append('行动链接暂不可用。已启用哈希保护，如需重发请点击轮换凭证。')
 
     return render_template(
         'caregiver_wechat_template.html',
         message='\n'.join(message_lines),
         action_link=action_link,
-        short_code=short_code,
+        pair=pair,
         community_code=community_code,
         weather=weather_data,
         weather_available=weather_available,

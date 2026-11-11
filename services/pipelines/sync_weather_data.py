@@ -18,7 +18,7 @@ from core.app import create_app  # noqa: E402
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.db_models import CommunityDaily, DailyStatus, Pair, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402
-from core.weather import get_consecutive_hot_days, is_qweather_online_weather  # noqa: E402
+from core.weather import get_consecutive_hot_days, is_qweather_online_weather, weather_sync_bypass  # noqa: E402
 from core.time_utils import today_local  # noqa: E402
 from services.heat_action_service import HeatActionService  # noqa: E402
 from services.weather_service import WeatherService  # noqa: E402
@@ -192,7 +192,7 @@ def backfill_weather_from_csv(csv_path=None, location=None, overwrite=False, sta
 
 def sync_daily_weather(target_date=None, location=None, overwrite=True):
     target_date = _parse_date(target_date) or today_local()
-    with app.app_context():
+    with app.app_context(), weather_sync_bypass():
         location = _normalize_location(location)
         weather_service = WeatherService()
         weather_data = weather_service.get_current_weather(location)
@@ -273,7 +273,7 @@ def _outreach_summary(total_people, confirmed_count, help_count, escalation_coun
 def sync_action_daily(target_date=None, community_code=None, overwrite=False):
     """Sync daily heat action status for all active pairs."""
     target_date = _parse_date(target_date) or today_local()
-    with app.app_context():
+    with app.app_context(), weather_sync_bypass():
         query = Pair.query.filter_by(status='active')
         if community_code:
             query = query.filter_by(community_code=community_code)

@@ -7,6 +7,7 @@
 - 显示给用户时，使用 core.time_utils 中的本地时区转换函数
 - 避免使用已废弃的 lambda: datetime.now(timezone.utc)()（返回 naive datetime）
 """
+import hashlib
 from datetime import datetime, timezone
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -46,7 +47,17 @@ class User(UserMixin, db.Model):
             revoke_api_tokens(self.id)
 
     def check_password(self, password):
+        if not self.password_hash or not isinstance(password, str):
+            return False
         return check_password_hash(self.password_hash, password)
+
+    def password_session_stamp(self) -> str:
+        return hashlib.sha256((self.password_hash or '').encode('utf-8')).hexdigest()[:16]
+
+    def get_id(self) -> str:
+        if self.id is None:
+            return ''
+        return f"{self.id}:{self.password_session_stamp()}"
 
 
 class MedicalRecord(db.Model):
@@ -257,7 +268,7 @@ class PairLink(db.Model):
     __tablename__ = 'pair_links'
     id = db.Column(db.Integer, primary_key=True)
     caregiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    short_code = db.Column(db.String(12), unique=True, nullable=False)
+    short_code = db.Column(db.String(12), unique=True, nullable=True)
     short_code_hash = db.Column(db.String(64))
     token_hash = db.Column(db.String(128), nullable=False)
     community_code = db.Column(db.String(100), nullable=False)
@@ -313,7 +324,7 @@ class Pair(db.Model):
     # 原始自由输入的地点（如“九江某乡镇”），用于地理编码与多地区支持
     location_query = db.Column(db.String(200))
     elder_code = db.Column(db.String(40), unique=True, nullable=False)
-    short_code = db.Column(db.String(12), unique=True, nullable=False)
+    short_code = db.Column(db.String(12), unique=True, nullable=True)
     short_code_hash = db.Column(db.String(64))
     short_code_expires_at = db.Column(db.DateTime)
     status = db.Column(db.String(20), default='active')  # active/inactive
@@ -485,6 +496,7 @@ class UsageEvent(db.Model):
         db.Index('ix_usage_events_user_id', 'user_id'),
         db.Index('ix_usage_events_event_type', 'event_type'),
         db.Index('ix_usage_events_created_at', 'created_at'),
+        db.Index('ix_usage_events_user_created_at', 'user_id', 'created_at'),
     )
 
 
